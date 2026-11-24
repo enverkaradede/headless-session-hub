@@ -1,5 +1,5 @@
 /** App shell: backdrop glows, sidebar, and the active view with section transitions. */
-import { Anchor, Plus, RotateCw } from "lucide-react";
+import { Anchor, Plus, RotateCw, TriangleAlert } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect } from "react";
 import { NewSession } from "./app/NewSession";
@@ -46,7 +46,62 @@ function Shell() {
           </motion.div>
         </AnimatePresence>
       </main>
+      <ConfirmLeave />
     </div>
+  );
+}
+
+/** "Discard what you typed?" before a navigation would throw away unsaved input. */
+function ConfirmLeave() {
+  const pending = useHub((state) => state.pendingView);
+  useEffect(() => {
+    if (!pending) return;
+    // Capture phase: while the dialog is open, Esc means "stay", never "close the screen".
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      hub.cancelLeave();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [pending]);
+  return (
+    <AnimatePresence>
+      {pending && (
+        <motion.div className="fixed inset-0 z-50 grid place-items-center bg-harbor-950/70 backdrop-blur-sm" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => hub.cancelLeave()}>
+          <motion.div
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="confirm-leave-title"
+            initial={{ opacity: 0, y: 16, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.98 }}
+            transition={{ type: "spring", stiffness: 460, damping: 34 }}
+            onClick={(event) => event.stopPropagation()}
+            className="w-[400px] rounded-3xl border border-white/[0.08] bg-gradient-to-b from-harbor-850 to-harbor-900 p-6 shadow-[0_30px_80px_-30px_rgba(0,0,0,0.9)]"
+          >
+            <div className="flex items-start gap-3">
+              <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-beacon-400/10 text-beacon-300 ring-1 ring-beacon-400/25">
+                <TriangleAlert className="size-5" />
+              </span>
+              <div>
+                <h2 id="confirm-leave-title" className="font-display text-[17px] font-semibold tracking-tight">Yazdıkların silinecek</h2>
+                <p className="mt-1 text-[13px] leading-relaxed text-ink-400">Yeni oturum formunda kaydedilmemiş bir içerik var. Çıkarsan geri getirilemez.</p>
+              </div>
+            </div>
+            <div className="mt-6 flex justify-end gap-2">
+              <Button variant="danger" onClick={() => hub.confirmLeave()}>
+                Sil ve çık
+              </Button>
+              <Button variant="primary" autoFocus onClick={() => hub.cancelLeave()}>
+                Kal
+              </Button>
+            </div>
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 }
 

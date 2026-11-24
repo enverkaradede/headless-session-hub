@@ -24,6 +24,8 @@ export interface HubState {
   devices: Record<string, DeviceState>;
   timelines: Record<string, TimelineEvent[]>;
   view: View;
+  /** A navigation held back until the owner confirms discarding unsaved input. */
+  pendingView: View | null;
 }
 
 export const timelineKey = (device: string, sessionId: string) => `${device}::${sessionId}`;
@@ -37,7 +39,10 @@ class HubStore {
     devices: { [LOCAL]: emptyDevice(LOCAL, "Bu cihaz", false) },
     timelines: {},
     view: { kind: "home" },
+    pendingView: null,
   };
+  /** Returns true while the current screen holds input that leaving would discard. */
+  private leaveGuard: (() => boolean) | null = null;
   private readonly listeners = new Set<Listener>();
   private started = false;
 
@@ -59,9 +64,38 @@ class HubStore {
     this.set({ devices: { ...this.state.devices, [key]: change(current) } });
   }
 
-  setView(view: View): void {
-    this.set({ view });
+  /** Every navigation goes through here, so a dirty form is protected from Esc, the sidebar and settings alike. */
+  setView(view: View, options: { force?: boolean } = {}): void {
+    if (!options.force && this.leaveGuard?.()) {
+      this.set({ pendingView: view });
+      return;
+    }
+    this.set({ view, pendingView: null });
     if (view.kind === "session") void this.loadSession(view.device, view.sessionId);
+  }
+
+  /** Registers the current screen's guard; the returned function removes it (only if still current). */
+  setLeaveGuard(guard: () => boolean): () => void {
+    this.leaveGuard = guard;
+    return () => {
+      if (this.leaveGuard === guard) this.leaveGuard = null;
+    };
+  }
+
+  /** Leaves without the guard, e.g. after the form was submitted successfully. */
+  clearLeaveGuard(): void {
+    this.leaveGuard = null;
+  }
+
+  confirmLeave(): void {
+    const next = this.state.pendingView;
+    this.leaveGuard = null;
+    this.set({ pendingView: null });
+    if (next) this.setView(next, { force: true });
+  }
+
+  cancelLeave(): void {
+    this.set({ pendingView: null });
   }
 
   /** Wires shell events once and loads the initial snapshot. */

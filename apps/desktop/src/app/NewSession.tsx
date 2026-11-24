@@ -3,7 +3,7 @@ import type { EngineSettings, PermissionMode, WaitPolicy } from "@hub/protocol";
 import { open } from "@tauri-apps/plugin-dialog";
 import { ChevronDown, FolderOpen, Rocket, ShieldAlert } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { LOCAL, rpc } from "../lib/ipc";
 import { hub, useHub } from "../lib/store";
 import { Button, Card, Input, Row, SectionHeader, Segmented, Select, TextArea } from "../ui/kit";
@@ -60,6 +60,12 @@ export function NewSession() {
   const [disallowedTools, setDisallowedTools] = useState("");
   const [starting, setStarting] = useState(false);
 
+  // Unsaved input asks before any navigation discards it (Esc, sidebar, settings).
+  const dirty = [prompt, name, labels, systemPrompt, allowedTools, disallowedTools].some((value) => value.trim() !== "");
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  useEffect(() => hub.setLeaveGuard(() => dirtyRef.current), []);
+
   useEffect(() => {
     setSettings(null);
     rpc(device, "settings.get", {})
@@ -110,6 +116,7 @@ export function NewSession() {
         ...(allowedTools.trim() ? { allowedTools: splitList(allowedTools) } : {}),
         ...(disallowedTools.trim() ? { disallowedTools: splitList(disallowedTools) } : {}),
       });
+      hub.clearLeaveGuard();
       hub.setView({ kind: "session", device, sessionId: session.id });
     } catch (err) {
       push("error", err instanceof Error ? err.message : "Oturum başlatılamadı");
