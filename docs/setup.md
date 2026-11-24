@@ -30,13 +30,29 @@ pnpm bundle
 pnpm release   # optional: publish to GitHub Releases for auto-update
 ```
 
+### Building on Windows-on-ARM (e.g. VMware Fusion on an Apple Silicon Mac)
+
+`pnpm bundle` targets **x86_64** on Windows by default. That installer runs natively on Intel/AMD PCs
+and, emulated, on Windows-on-ARM. An ARM64 build would not run on an x64 PC, and it would also need `clang`.
+
+On an ARM64 Windows build machine, add the x64 compilers once:
+
+```powershell
+& "C:\Program Files (x86)\Microsoft Visual Studio\Installer\setup.exe" modify `
+  --installPath "C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools" `
+  --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --passive --norestart
+```
+
+To build for ARM64 instead (ARM devices only), install LLVM (`winget install LLVM.LLVM`) and run
+`pnpm bundle --target aarch64-pc-windows-msvc`.
+
 `pnpm bundle` runs `scripts/prepare-bundle.mjs`, which:
 - builds the engine,
-- copies the running `node.exe` into `src-tauri/resources/node`,
+- puts Node for the target into `src-tauri/resources/node`: a copy of the running `node.exe` when the target matches the build machine, otherwise the official build from nodejs.org, verified against `SHASUMS256.txt`,
 - builds `hubctl.exe` and places it as a Tauri sidecar.
 
 It then runs `tauri build` with `tauri.bundle.conf.json`. The NSIS installer (per-user, no admin) lands in
-`target/release/bundle/nsis/`.
+`target/x86_64-pc-windows-msvc/release/bundle/nsis/`.
 
 > The installer is not code-signed yet, so Windows SmartScreen will warn on first run. Signing needs a certificate; see the Tauri docs on Windows code signing.
 

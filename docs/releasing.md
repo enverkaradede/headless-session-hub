@@ -79,7 +79,7 @@ git pull --tags
 pnpm install
 pnpm test
 . .\scripts\signing-env.ps1
-pnpm bundle      # builds and signs: target\release\bundle\nsis\Session Hub_<v>_x64-setup.exe + .sig
+pnpm bundle      # x64 by default; builds and signs target\x86_64-pc-windows-msvc\release\bundle\nsis\Session Hub_<v>_x64-setup.exe + .sig
 pnpm release     # creates/updates GitHub Release v<v>, uploads the installer and latest.json
 ```
 

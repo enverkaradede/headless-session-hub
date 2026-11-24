@@ -9,32 +9,46 @@ import { fileURLToPath } from "node:url";
 
 const REPO = "enverkaradede/headless-session-hub";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const bundleDir = path.join(root, "target", "release", "bundle");
 const { version } = JSON.parse(readFileSync(path.join(root, "apps", "desktop", "package.json"), "utf8"));
 const tag = `v${version}`;
 
 const gh = (args, options = {}) => execFileSync("gh", args, { cwd: root, encoding: "utf8", ...options });
 
-/** Updater artifacts per platform: the installer/archive and its .sig next to it. */
+/** Updater platform key for each Rust target triple that `pnpm bundle --target` can produce. */
+const PLATFORM_BY_TRIPLE = {
+  "x86_64-pc-windows-msvc": "windows-x86_64",
+  "aarch64-pc-windows-msvc": "windows-aarch64",
+  "aarch64-apple-darwin": "darwin-aarch64",
+  "x86_64-apple-darwin": "darwin-x86_64",
+  "x86_64-unknown-linux-gnu": "linux-x86_64",
+};
+const UPDATER_ARTIFACTS = [
+  { dir: "nsis", match: (name) => name.endsWith("-setup.exe") },
+  { dir: "macos", match: (name) => name.endsWith(".app.tar.gz") },
+  { dir: "appimage", match: (name) => name.endsWith(".AppImage") },
+];
+
+/** Signed updater artifacts under target/<triple>/release/bundle for this version. */
 function findArtifacts() {
-  const candidates = [
-    { dir: "nsis", match: (name) => name.endsWith("-setup.exe"), platform: "windows-x86_64" },
-    { dir: "macos", match: (name) => name.endsWith(".app.tar.gz"), platform: process.arch === "arm64" ? "darwin-aarch64" : "darwin-x86_64" },
-    { dir: "appimage", match: (name) => name.endsWith(".AppImage"), platform: "linux-x86_64" },
-  ];
+  const targetDir = path.join(root, "target");
   const found = [];
-  for (const candidate of candidates) {
-    const dir = path.join(bundleDir, candidate.dir);
-    if (!existsSync(dir)) continue;
-    for (const name of readdirSync(dir)) {
-      if (!candidate.match(name) || !name.includes(version)) continue;
-      const file = path.join(dir, name);
-      const signature = `${file}.sig`;
-      if (!existsSync(signature)) throw new Error(`${name} has no .sig: was TAURI_SIGNING_PRIVATE_KEY set during pnpm bundle?`);
-      found.push({ platform: candidate.platform, file, signature: readFileSync(signature, "utf8").trim() });
+  for (const triple of existsSync(targetDir) ? readdirSync(targetDir) : []) {
+    const platform = PLATFORM_BY_TRIPLE[triple];
+    const bundleDir = path.join(targetDir, triple, "release", "bundle");
+    if (!platform || !existsSync(bundleDir)) continue;
+    for (const kind of UPDATER_ARTIFACTS) {
+      const dir = path.join(bundleDir, kind.dir);
+      if (!existsSync(dir)) continue;
+      for (const name of readdirSync(dir)) {
+        if (!kind.match(name) || !name.includes(version)) continue;
+        const file = path.join(dir, name);
+        const signature = `${file}.sig`;
+        if (!existsSync(signature)) throw new Error(`${name} has no .sig: was the signing key loaded during pnpm bundle?`);
+        found.push({ platform, file, signature: readFileSync(signature, "utf8").trim() });
+      }
     }
   }
-  if (found.length === 0) throw new Error(`no ${version} bundle found under ${bundleDir}; run pnpm bundle first`);
+  if (found.length === 0) throw new Error(`no ${version} bundle found under target/<triple>/release/bundle; run pnpm bundle first`);
   return found;
 }
 
