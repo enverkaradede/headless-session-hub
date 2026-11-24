@@ -134,7 +134,7 @@ export function Sidebar() {
 function VersionSignature() {
   const { currentVersion } = useUpdater();
   return (
-    <div className="mt-2 px-3 leading-tight">
+    <div className="mt-2 px-3 text-right leading-tight">
       <div className="font-mono text-[10.5px] text-ink-500 tabular-nums">Session Hub {currentVersion ? `v${currentVersion}` : ""}</div>
       <div className="mt-0.5 font-display text-[10.5px] tracking-wide text-ink-500/70">Enver Karadede</div>
     </div>

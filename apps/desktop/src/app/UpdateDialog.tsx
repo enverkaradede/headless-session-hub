@@ -1,7 +1,7 @@
 /** Sidebar update pill and the dialog that downloads, installs and relaunches. */
 import { ArrowUpCircle, Download, RotateCcw, Sparkles, X } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import { updater, useUpdater } from "../lib/updater";
 import { Button } from "../ui/kit";
@@ -40,6 +40,16 @@ export function UpdatePill() {
 
 export function UpdateDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const state = useUpdater();
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      onClose();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [open, onClose]);
   return (
     <AnimatePresence>
       {open && (

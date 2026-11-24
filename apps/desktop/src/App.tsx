@@ -23,6 +23,8 @@ function Shell() {
   const view = useHub((state) => state.view);
   const { push } = useToasts();
 
+  useEffect(() => closeViewOnEscape(), []);
+
   useEffect(() => {
     hub.start().catch((err: unknown) => push("error", err instanceof Error ? err.message : "Başlatılamadı"));
     updater.start();
@@ -46,6 +48,25 @@ function Shell() {
       </main>
     </div>
   );
+}
+
+/**
+ * Esc closes settings, the new-session form and an open session, back to home. Layers above a view
+ * (subagent pane, dialogs, fields that revert on Esc) claim the key first with preventDefault().
+ * In a text field the first Esc only leaves the field, so a half-written message is never lost.
+ */
+function closeViewOnEscape(): () => void {
+  const onKey = (event: KeyboardEvent) => {
+    if (event.key !== "Escape" || event.defaultPrevented || event.isComposing) return;
+    const target = event.target;
+    if (target instanceof HTMLElement && target.closest("input, textarea, select, [contenteditable='true']")) {
+      target.blur();
+      return;
+    }
+    if (hub.getState().view.kind !== "home") hub.setView({ kind: "home" });
+  };
+  window.addEventListener("keydown", onKey);
+  return () => window.removeEventListener("keydown", onKey);
 }
 
 function Backdrop() {

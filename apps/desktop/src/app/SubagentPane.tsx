@@ -92,10 +92,13 @@ export function SubagentPane({
   useEffect(() => {
     if (!currentId) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onNavigate(stack.slice(0, -1));
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      event.preventDefault();
+      onNavigate(stack.slice(0, -1));
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    // Capture phase: the pane closes before the app-level Esc handler would close the whole session.
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [currentId, stack, onNavigate]);
 
   useLayoutEffect(() => {

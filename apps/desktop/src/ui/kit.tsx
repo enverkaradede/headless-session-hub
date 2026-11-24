@@ -152,6 +152,7 @@ export function TextField({ value, onCommit, placeholder, type = "text", mono = 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Enter") event.currentTarget.blur();
     if (event.key === "Escape") {
+      event.preventDefault(); // this Esc reverts the field; it must not also close the screen
       setDraft(value);
       event.currentTarget.blur();
     }
