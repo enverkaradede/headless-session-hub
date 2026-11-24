@@ -16,9 +16,9 @@ every session starts.
 ```powershell
 # one-time
 Set-ExecutionPolicy -Scope CurrentUser RemoteSigned   # Windows blocks scripts by default; pnpm and the signing helper need this
-winget install OpenJS.NodeJS.LTS      # Node 24 LTS: it is copied into the bundle
+winget install OpenJS.NodeJS.LTS      # any Node >= 24 runs the build; the app itself always ships Node 24 LTS from nodejs.org
 npm install -g pnpm@11
-winget install Rustlang.Rustup        # then: rustup default stable-msvc
+winget install Rustlang.Rustup        # rustup (NOT the standalone Rustlang.Rust.MSVC package); new window, then: rustup default stable
 # Visual Studio Build Tools with the "Desktop development with C++" workload, and WebView2 (preinstalled on Windows 11)
 
 # each build
@@ -48,7 +48,7 @@ To build for ARM64 instead (ARM devices only), install LLVM (`winget install LLV
 
 `pnpm bundle` runs `scripts/prepare-bundle.mjs`, which:
 - builds the engine,
-- puts Node for the target into `src-tauri/resources/node`: a copy of the running `node.exe` when the target matches the build machine, otherwise the official build from nodejs.org, verified against `SHASUMS256.txt`,
+- downloads the latest Node 24 LTS `node.exe` for the target from nodejs.org, verifies it against `SHASUMS256.txt`, and puts it in `src-tauri/resources/node`. The build machine's own Node version does not matter,
 - builds `hubctl.exe` and places it as a Tauri sidecar.
 
 It then runs `tauri build` with `tauri.bundle.conf.json`. The NSIS installer (per-user, no admin) lands in

@@ -10,7 +10,8 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync }
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const REQUIRED_NODE_MAJOR = 24;
+/** The app ships this Node LTS line (latest patch), whatever Node the build machine happens to run. */
+const BUNDLED_NODE_MAJOR = 24;
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const desktopDir = path.join(root, "apps", "desktop");
 const tauriDir = path.join(desktopDir, "src-tauri");
@@ -38,11 +39,19 @@ function argValue(name) {
   return index >= 0 ? process.argv[index + 1] : undefined;
 }
 
-/** Downloads node.exe for another architecture from nodejs.org and checks it against SHASUMS256.txt. */
+/** Latest release of the bundled LTS line that has a standalone node.exe for this platform. */
+async function resolveNodeVersion(dist) {
+  const index = await (await fetch("https://nodejs.org/dist/index.json")).json();
+  const release = index.find((entry) => entry.version.startsWith(`v${BUNDLED_NODE_MAJOR}.`) && entry.files.includes(`${dist}-exe`));
+  if (!release) throw new Error(`no Node ${BUNDLED_NODE_MAJOR} release with ${dist}-exe on nodejs.org`);
+  return release.version;
+}
+
+/** Downloads the bundled Node for the target from nodejs.org and checks it against SHASUMS256.txt. */
 async function downloadNode(target, destination) {
   const dist = NODE_DIST[target];
   if (!dist) throw new Error(`no Node download mapping for ${target}; build on that platform instead`);
-  const version = `v${process.versions.node}`;
+  const version = await resolveNodeVersion(dist);
   const base = `https://nodejs.org/dist/${version}`;
   console.log(`> downloading Node ${version} ${dist}/node.exe`);
   const sums = await (await fetch(`${base}/SHASUMS256.txt`)).text();
@@ -58,17 +67,33 @@ async function downloadNode(target, destination) {
   if (actual !== expected) throw new Error(`Node checksum mismatch for ${dist}/node.exe (expected ${expected}, got ${actual})`);
   writeFileSync(destination, bytes);
   console.log(`  verified sha256 ${actual}`);
+  return version;
+}
+
+/** Makes sure the Rust standard library for `target` is installed; explains the fix when rustup is missing. */
+function ensureRustTarget(target) {
+  const sysroot = execFileSync("rustc", ["--print", "sysroot"], { encoding: "utf8" }).trim();
+  if (existsSync(path.join(sysroot, "lib", "rustlib", target))) return;
+  try {
+    ensureRustTarget(target);
+  } catch (err) {
+    if (err?.code !== "ENOENT") throw err;
+    console.error(
+      `\nRust for ${target} is not installed and rustup was not found (Rust seems to be a standalone install).\n` +
+        "Install rustup, which manages targets:\n" +
+        "  winget uninstall Rustlang.Rust.MSVC      (only if that package is installed)\n" +
+        "  winget install Rustlang.Rustup\n" +
+        "  then open a NEW PowerShell window and run:  rustup default stable\n" +
+        "See docs/setup.md.",
+    );
+    process.exit(1);
+  }
 }
 
 // Updater artifacts are signed during `tauri build`; fail before minutes of compiling, not after.
 if (!process.env.TAURI_SIGNING_PRIVATE_KEY) {
   console.error("TAURI_SIGNING_PRIVATE_KEY is not set. Run `. .\\scripts\\signing-env.ps1` first (docs/releasing.md).");
   process.exit(1);
-}
-
-const nodeMajor = Number(process.versions.node.split(".")[0]);
-if (nodeMajor !== REQUIRED_NODE_MAJOR) {
-  console.warn(`! Bundling Node ${process.versions.node}; the supported runtime is Node ${REQUIRED_NODE_MAJOR} LTS.`);
 }
 
 const host = hostTriple();
@@ -92,9 +117,15 @@ const nodeOut = path.join(tauriDir, "resources", "node");
 rmSync(nodeOut, { recursive: true, force: true });
 mkdirSync(nodeOut, { recursive: true });
 const nodeTarget = path.join(nodeOut, exe("node"));
-if (target === host) copyFileSync(process.execPath, nodeTarget);
-else await downloadNode(target, nodeTarget);
-if (!targetIsWindows) chmodSync(nodeTarget, 0o755);
+let bundledNode;
+if (NODE_DIST[target]) {
+  bundledNode = await downloadNode(target, nodeTarget);
+} else {
+  // Non-Windows targets are developer builds: reuse this machine's Node.
+  copyFileSync(process.execPath, nodeTarget);
+  chmodSync(nodeTarget, 0o755);
+  bundledNode = process.version;
+}
 
 // 3. hubctl sidecar
 run("cargo", ["build", "--release", "-p", "hubctl", "--target", target]);
@@ -109,4 +140,4 @@ const tauriCli = path.join(desktopDir, "node_modules", "@tauri-apps", "cli", "ta
 if (!existsSync(tauriCli)) throw new Error("Tauri CLI not installed; run pnpm install first");
 run(process.execPath, [tauriCli, "build", "--target", target, "--config", "src-tauri/tauri.bundle.conf.json"], desktopDir);
 
-console.log(`\nBundle ready: target/${target}/release/bundle/ (Node ${process.versions.node} for ${target}).`);
+console.log(`\nBundle ready: target/${target}/release/bundle/ (bundled Node ${bundledNode} for ${target}).`);
