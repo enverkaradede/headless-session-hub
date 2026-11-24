@@ -65,6 +65,9 @@ that machine**, so the design defaults to deny.
 ## Transport
 
 - **P2P:** iroh QUIC with TLS 1.3, dialed and authenticated by Ed25519 device keys.
+  - TLS to relays, pkarr and DNS-over-HTTPS is verified against the **OS certificate store**, as browsers do.
+    This keeps corporate networks that inspect HTTPS working. A relay only carries already end-to-end
+    encrypted QUIC, so a TLS-intercepting proxy cannot read or alter session traffic.
   - Pairing codes are 128-bit, single-use and expire after 10 minutes.
   - Unpaired keys are rejected at connect time.
   - Relays see only ciphertext.

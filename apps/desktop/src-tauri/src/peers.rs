@@ -283,6 +283,10 @@ impl Peers {
         };
         let endpoint = Endpoint::builder(presets::N0)
             .secret_key(key)
+            // Trust the OS certificate store (like browsers) for relay/pkarr/DoH TLS. Corporate networks that
+            // inspect HTTPS re-sign with an IT-installed root that iroh's embedded Mozilla roots reject
+            // ("invalid peer certificate: UnknownIssuer"). Peer traffic stays end-to-end authenticated by iroh.
+            .ca_tls_config(iroh::tls::CaTlsConfig::system())
             .relay_mode(relay_mode)
             .alpns(vec![RPC_ALPN.to_vec(), PAIR_ALPN.to_vec()])
             .bind()
@@ -442,7 +446,8 @@ impl Peers {
         }
         let endpoint = self.ensure_endpoint().await?;
         // The code must carry the relay address to work from another network; give the relay time to answer.
-        if tokio::time::timeout(ONLINE_WAIT, endpoint.online()).await.is_err() {
+        let online = tokio::time::timeout(ONLINE_WAIT, endpoint.online()).await.is_ok();
+        if !online {
             log::warn!("pairing code created without a relay connection; it will only work on the same network");
         }
         let mut bytes = [0u8; PAIRING_TOKEN_BYTES];
@@ -452,7 +457,8 @@ impl Peers {
         pairing.retain(|_, pending| pending.expires > Instant::now());
         pairing.insert(token.clone(), PendingPairing { access, expires: Instant::now() + PAIRING_CODE_TTL });
         let addr = endpoint.addr();
-        let via_relay = addr.relay_urls().next().is_some();
+        // The address can name a relay that was chosen but never connected; only a live relay link counts.
+        let via_relay = online && addr.relay_urls().next().is_some();
         log::info!("pairing code created (relay: {via_relay}, direct addresses: {})", addr.ip_addrs().count());
         let payload = PairingCodePayload { v: 1, addr, token, name };
         let json = serde_json::to_vec(&payload).map_err(storage)?;
