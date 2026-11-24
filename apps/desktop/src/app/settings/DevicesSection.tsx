@@ -15,6 +15,7 @@ const ACCESS_OPTIONS: ReadonlyArray<{ value: PeerAccess; label: string }> = [
   { value: "full", label: ACCESS_LABEL.full },
 ];
 const PAIRING_TTL_MS = 10 * 60_000;
+const DIAGNOSTICS_POLL_MS = 3_000;
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
@@ -237,8 +238,11 @@ function DiagnosticsCard({ enabled }: { enabled: boolean }) {
       setBusy(false);
     }
   };
+  // Live while the card is on screen: the first relay handshake takes a few seconds after P2P starts.
   useEffect(() => {
     void refresh();
+    const timer = window.setInterval(() => void shell.diagnostics().then(setState).catch(() => undefined), DIAGNOSTICS_POLL_MS);
+    return () => window.clearInterval(timer);
   }, [enabled]);
 
   return (
@@ -259,14 +263,16 @@ function DiagnosticsCard({ enabled }: { enabled: boolean }) {
           <Row
             label="Relay bağlantısı"
             hint={
-              state.online
+              state.relayState === "online"
                 ? "Bağlı: başka ağlardaki cihazlar bu cihaza ulaşabilir."
-                : "Bağlanamadı: ağ UDP/HTTPS çıkışını, relay sunucusunu ya da TLS'yi engelliyor olabilir (kurumsal proxy, güvenlik duvarı)."
+                : state.relayState === "connecting"
+                  ? "Relay sunucusuna bağlanılıyor; birkaç saniye sürer."
+                  : "Bağlanamadı: ağ HTTPS (443) çıkışını, relay sunucusunu ya da TLS'yi engelliyor olabilir (kurumsal proxy, güvenlik duvarı)."
             }
           >
             <span className="flex items-center gap-2 text-[12.5px]">
-              <StatusDot tone={state.online ? "ok" : "error"} />
-              {state.online ? "Bağlı" : "Yok"}
+              <StatusDot tone={state.relayState === "online" ? "ok" : state.relayState === "connecting" ? "busy" : "error"} />
+              {state.relayState === "online" ? "Bağlı" : state.relayState === "connecting" ? "Bağlanıyor…" : "Yok"}
             </span>
           </Row>
           <Row label="Relay" hint={state.customRelay ? "Kendi relay sunucun." : "n0'ın halka açık relay'leri."}>

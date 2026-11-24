@@ -75,6 +75,7 @@ export interface PairingCodeResult {
 
 export interface PeerDiagnostics {
   active: boolean;
+  relayState: "connecting" | "online" | "offline";
   online: boolean;
   relayUrls: string[];
   directAddresses: string[];

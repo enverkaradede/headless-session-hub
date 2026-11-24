@@ -160,6 +160,8 @@ pub struct PairingCode {
 #[serde(rename_all = "camelCase")]
 pub struct PeerDiagnostics {
     pub active: bool,
+    /// "connecting" right after start (the first relay handshake takes a few seconds), then "online"/"offline".
+    pub relay_state: &'static str,
     pub online: bool,
     pub relay_urls: Vec<String>,
     pub direct_addresses: Vec<String>,
@@ -208,6 +210,7 @@ struct Inner {
     pairing: Mutex<HashMap<String, PendingPairing>>,
     links: RwLock<HashMap<String, HostLink>>,
     client_connections: Mutex<HashMap<String, Vec<Connection>>>,
+    bound_at: Mutex<Option<Instant>>,
 }
 
 /// Managed Tauri state for everything P2P.
@@ -248,6 +251,7 @@ impl Peers {
                 pairing: Mutex::new(HashMap::new()),
                 links: RwLock::new(HashMap::new()),
                 client_connections: Mutex::new(HashMap::new()),
+                bound_at: Mutex::new(None),
             }),
         }
     }
@@ -286,6 +290,7 @@ impl Peers {
             .map_err(network)?;
         *slot = Some(endpoint.clone());
         drop(slot);
+        *self.inner.bound_at.lock().await = Some(Instant::now());
         tokio::spawn(self.clone().accept_loop(endpoint.clone()));
         let hosts = self.inner.config.read().await.hosts.clone();
         for host in hosts {
@@ -507,12 +512,15 @@ impl Peers {
     pub async fn diagnostics(&self) -> PeerDiagnostics {
         let custom_relay = self.inner.config.read().await.relay_url.is_some();
         let Some(endpoint) = self.inner.endpoint.read().await.clone() else {
-            return PeerDiagnostics { active: false, online: false, relay_urls: vec![], direct_addresses: vec![], custom_relay };
+            return PeerDiagnostics { active: false, relay_state: "offline", online: false, relay_urls: vec![], direct_addresses: vec![], custom_relay };
         };
         let online = tokio::time::timeout(ONLINE_PROBE, endpoint.online()).await.is_ok();
+        let starting = self.inner.bound_at.lock().await.is_some_and(|at| at.elapsed() < ONLINE_WAIT);
+        let relay_state = if online { "online" } else if starting { "connecting" } else { "offline" };
         let addr = endpoint.addr();
         PeerDiagnostics {
             active: true,
+            relay_state,
             online,
             relay_urls: addr.relay_urls().map(|url| url.to_string()).collect(),
             direct_addresses: addr.ip_addrs().map(|ip| ip.to_string()).collect(),
@@ -533,11 +541,14 @@ impl Peers {
                         return;
                     }
                 };
+                let alpn = connection.alpn().to_vec();
+                let remote = connection.remote_id();
+                log::info!("incoming connection from {} ({})", remote.fmt_short(), String::from_utf8_lossy(&alpn));
                 if !peers.inner.config.read().await.host_enabled {
+                    log::warn!("rejected {}: remote control is off", remote.fmt_short());
                     connection.close(1u32.into(), b"remote control disabled");
                     return;
                 }
-                let alpn = connection.alpn().to_vec();
                 if alpn == PAIR_ALPN {
                     peers.serve_pairing(connection).await;
                 } else if alpn == RPC_ALPN {
@@ -555,6 +566,10 @@ impl Peers {
             Ok(request) => self.redeem(&request, connection.remote_id()).await,
             Err(_) => Err("malformed request".to_owned()),
         };
+        match &response {
+            Ok(access) => log::info!("paired with {} as {access:?}", connection.remote_id().fmt_short()),
+            Err(error) => log::warn!("pairing from {} refused: {error}", connection.remote_id().fmt_short()),
+        }
         let body = match response {
             Ok(access) => PairResponse { ok: true, host_name, access: Some(access), error: None },
             Err(error) => PairResponse { ok: false, host_name, access: None, error: Some(error) },
@@ -592,6 +607,7 @@ impl Peers {
     async fn serve_client(&self, connection: Connection) {
         let remote = connection.remote_id().to_string();
         if Self::client_for(&*self.inner.config.read().await, &remote).is_none() {
+            log::warn!("rejected unpaired device {}", connection.remote_id().fmt_short());
             connection.close(2u32.into(), b"not paired");
             return;
         }
