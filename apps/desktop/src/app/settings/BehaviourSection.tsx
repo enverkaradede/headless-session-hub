@@ -1,7 +1,9 @@
 /** Behaviour: wait policy, warm processes, usage-limit protection, auth guard, privacy and retention. */
 import type { EngineSettings, WaitPolicy } from "@hub/protocol";
-import { Clock, EyeOff, ShieldAlert, Timer } from "lucide-react";
-import { Card, Row, Segmented, TextField, Toggle } from "../../ui/kit";
+import { Clock, Cpu, EyeOff, ShieldAlert, Timer } from "lucide-react";
+import { PERMISSION_MODES } from "../../lib/format";
+import { Card, Row, Segmented, Select, TextField, Toggle } from "../../ui/kit";
+import { ModelPicker } from "../../ui/ModelPicker";
 
 interface SectionProps {
   device: string;
@@ -27,8 +29,21 @@ export function BehaviourSection({ settings, update }: SectionProps) {
   const setPolicy = (mode: WaitPolicy["mode"], nextMinutes = minutes) =>
     void update({ defaultWaitPolicy: mode === "wait" ? { mode } : { mode, minutes: nextMinutes } }, "Bekleme politikası kaydedildi");
 
+  const mode = PERMISSION_MODES.find((option) => option.value === settings.defaultPermissionMode) ?? PERMISSION_MODES[0];
   return (
     <>
+      <Card title="Oturum varsayılanları" icon={Cpu} description="Yeni oturumlar bunlarla başlar; her oturumda ve çalışırken ayrıca değiştirilebilir.">
+        <Row label="Model" hint="Profil varsayılanı: o Claude girişinin kendi ayarındaki model.">
+          <ModelPicker value={settings.defaultModel ?? ""} onChange={(next) => void update({ defaultModel: next || null }, "Varsayılan model kaydedildi")} />
+        </Row>
+        <Row label="Çalışma modu" hint={mode?.hint}>
+          <Select label="Çalışma modu" value={settings.defaultPermissionMode} options={PERMISSION_MODES} onChange={(next) => void update({ defaultPermissionMode: next }, "Varsayılan mod kaydedildi")} />
+        </Row>
+        <Row label="Soruları kart olarak sor" hint="Claude'dan sorularını AskUserQuestion ile sormasını ister; seçenekli kart olarak gelir. claude -p oturumlarında bu araç yoktur, orada düz metin soru algılanır.">
+          <Toggle label="Soruları kart olarak sor" checked={settings.askViaTool} onChange={(next) => void update({ askViaTool: next })} />
+        </Row>
+      </Card>
+
       <Card title="Cevap bekleme" icon={Clock} description="Bir oturum soru sorduğunda ya da izin istediğinde sen cevap verene kadar ne olacağı. Oturum bazında değiştirilebilir.">
         <Row
           label="Varsayılan politika"

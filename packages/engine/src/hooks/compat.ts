@@ -14,6 +14,19 @@ import { permissionResult, sessionScopedUpdates } from "../permissions.ts";
 import type { PermissionUpdate } from "@anthropic-ai/claude-agent-sdk";
 import path from "node:path";
 import { homedir } from "node:os";
+import type { ClaudeProfile } from "@hub/protocol";
+import { endsWithQuestion } from "../sessions/questions.ts";
+import { truncateText } from "../sessions/translate.ts";
+
+/** Token totals of a finished external session, read through the SDK's session API (not raw transcripts). */
+export interface SessionUsage {
+  inputTokens: number;
+  outputTokens: number;
+  model: string | null;
+}
+export type UsageReader = (sessionId: string, cwd: string, profile: ClaudeProfile) => Promise<SessionUsage | null>;
+
+const PREVIEW_CHARS = 160;
 
 /** Entrypoints of non-interactive runs. Interactive terminal sessions are intentionally ignored. */
 const HEADLESS_ENTRYPOINTS = new Set(["sdk-cli", "sdk-ts", "sdk-py"]);
@@ -29,7 +42,8 @@ const BaseHook = z.object({
 });
 
 export const HookEnvelope = z.object({
-  event: z.enum(["SessionStart", "SessionEnd", "Stop", "Notification", "PermissionRequest"]),
+  // RunResult is sent by `hubctl run` with the CLI's final JSON result (cost and usage).
+  event: z.enum(["SessionStart", "SessionEnd", "Stop", "Notification", "PermissionRequest", "RunResult"]),
   entrypoint: z.string().nullable(),
   /** Set by `hubctl run`: registers the session even if the entrypoint is unknown. */
   hubRun: z.object({ name: z.string().max(120).optional(), labels: z.array(z.string().max(48)).max(16).optional() }).nullable(),
@@ -44,6 +58,7 @@ export class CompatLayer {
     private readonly manager: SessionManager,
     private readonly clock: Clock,
     private readonly settings: () => EngineSettings,
+    private readonly readUsage: UsageReader = async () => null,
   ) {}
 
   async handle(envelope: HookEnvelope, signal: AbortSignal): Promise<HookResponse> {
@@ -54,19 +69,30 @@ export class CompatLayer {
     const tracked = existing ?? (this.shouldTrack(envelope) ? this.register(envelope, base.data) : null);
     if (!tracked) return {};
     switch (envelope.event) {
-      case "SessionStart":
-        this.manager.compatStatus(tracked.id, "running", null);
+      case "SessionStart": {
+        const model = typeof envelope.payload.model === "string" ? envelope.payload.model : null;
+        this.manager.compatUpdate(tracked.id, { status: "running", endReason: null, awaitingReply: false, ...(model ? { model } : {}) });
         return {};
+      }
       case "Notification":
         return this.onNotification(tracked, envelope.payload);
       case "Stop": {
         const last = typeof envelope.payload.last_assistant_message === "string" ? envelope.payload.last_assistant_message : null;
-        if (last) this.manager.appendTimeline(tracked.id, "assistant_text", last);
-        this.manager.compatStatus(tracked.id, "idle", null);
+        if (last) {
+          this.manager.appendTimeline(tracked.id, "assistant_text", last);
+          this.manager.compatUpdate(tracked.id, { lastMessagePreview: oneLine(last) });
+        }
+        // claude -p cannot use AskUserQuestion, so a question arrives as prose at the end of the turn.
+        if (endsWithQuestion(last)) this.manager.markAwaitingReply(tracked.id, last ?? "");
+        else this.manager.compatStatus(tracked.id, "idle", null);
         return {};
       }
       case "SessionEnd":
         this.manager.compatEnd(tracked.id, String(envelope.payload.reason ?? "other"));
+        void this.recordUsage(tracked);
+        return {};
+      case "RunResult":
+        this.onRunResult(tracked, envelope.payload);
         return {};
       case "PermissionRequest":
         return this.onPermissionRequest(tracked, envelope.payload, signal);
@@ -100,6 +126,7 @@ export class CompatLayer {
       inputTokens: 0,
       outputTokens: 0,
       lastMessagePreview: null,
+      awaitingReply: false,
       launch: { permissionMode: base.permission_mode ?? "default" },
     };
     this.manager.compatRegister(row);
@@ -116,6 +143,42 @@ export class CompatLayer {
       }
     }
     return settings.defaultProfileId;
+  }
+
+  /** Tokens from the SDK session API once the external run ended; cost stays unknown unless hubctl reported it. */
+  private async recordUsage(row: SessionRow): Promise<void> {
+    const profile = this.settings().profiles.find((candidate) => candidate.id === row.profileId);
+    if (!profile) return;
+    try {
+      const usage = await this.readUsage(row.id, row.cwd, profile);
+      if (!usage) return;
+      const current = this.manager.store.getSession(row.id);
+      this.manager.compatUpdate(row.id, {
+        inputTokens: usage.inputTokens,
+        outputTokens: usage.outputTokens,
+        ...(usage.model && !current?.model ? { model: usage.model } : {}),
+      });
+    } catch {
+      // Usage is informational; a missing transcript must not break the hook.
+    }
+  }
+
+  /** `hubctl run` forwards the CLI's final result: the only source of the cost estimate for -p runs. */
+  private onRunResult(row: SessionRow, payload: Record<string, unknown>): void {
+    const cost = typeof payload.total_cost_usd === "number" ? payload.total_cost_usd : null;
+    const modelUsage = payload.modelUsage && typeof payload.modelUsage === "object" ? (payload.modelUsage as Record<string, { inputTokens?: number; outputTokens?: number; cacheReadInputTokens?: number; cacheCreationInputTokens?: number }>) : null;
+    let inputTokens = 0;
+    let outputTokens = 0;
+    for (const usage of Object.values(modelUsage ?? {})) {
+      inputTokens += (usage.inputTokens ?? 0) + (usage.cacheReadInputTokens ?? 0) + (usage.cacheCreationInputTokens ?? 0);
+      outputTokens += usage.outputTokens ?? 0;
+    }
+    const model = modelUsage ? (Object.keys(modelUsage)[0] ?? null) : null;
+    this.manager.compatUpdate(row.id, {
+      ...(cost !== null ? { costUsd: cost } : {}),
+      ...(modelUsage ? { inputTokens, outputTokens } : {}),
+      ...(model && !row.model ? { model } : {}),
+    });
   }
 
   private onNotification(row: SessionRow, payload: Record<string, unknown>): HookResponse {
@@ -144,5 +207,9 @@ export class CompatLayer {
     const scoped = answer.decision === "allow_session" ? sessionScopedUpdates(suggestions) : [];
     return scoped.length > 0 ? { behavior: "allow", updatedPermissions: scoped } : { behavior: "allow" };
   }
+}
+
+function oneLine(text: string): string {
+  return truncateText(text.replace(/\s+/g, " ").trim(), PREVIEW_CHARS);
 }
 

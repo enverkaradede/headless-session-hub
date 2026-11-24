@@ -17,6 +17,7 @@ import {
   type ClaudeProfile,
   type EngineSettings,
   type PendingRequest,
+  type PermissionMode as PermissionModeValue,
   type Question,
   type RequestAnswer,
   type SessionStatus,
@@ -34,6 +35,7 @@ import { log } from "../log.ts";
 import { assertAllowedDirectory } from "../paths.ts";
 import { parseQuestions, permissionResult, previewToolInput, validateQuestionAnswer } from "../permissions.ts";
 import { InputQueue } from "./input-queue.ts";
+import { ASK_TOOL_HINT, endsWithQuestion } from "./questions.ts";
 import { translate, truncateText, type ResultInfo, type Translation } from "./translate.ts";
 
 const MINUTE_MS = 60_000;
@@ -95,6 +97,8 @@ interface LiveSession {
    * end: closing the input then would kill that work. The CLI starts another turn when they finish.
    */
   backgroundTasks: number;
+  /** Full text of the main conversation's latest assistant message, for plain-question detection. */
+  lastAssistantText: string | null;
 }
 
 export interface Actor {
@@ -155,9 +159,11 @@ export class SessionManager {
     const profile = this.profile(params.profileId ?? settings.defaultProfileId);
     const cwd = await assertAllowedDirectory(params.cwd, settings.allowedDirectories);
     const now = this.deps.clock.now();
+    const permissionMode = params.permissionMode ?? settings.defaultPermissionMode;
+    const model = params.model ?? settings.defaultModel ?? undefined;
     const launch: LaunchConfig = {
-      permissionMode: params.permissionMode,
-      ...(params.model ? { model: params.model } : {}),
+      permissionMode,
+      ...(model ? { model } : {}),
       ...(params.appendSystemPrompt ? { appendSystemPrompt: params.appendSystemPrompt } : {}),
       ...(params.allowedTools ? { allowedTools: params.allowedTools } : {}),
       ...(params.disallowedTools ? { disallowedTools: params.disallowedTools } : {}),
@@ -172,8 +178,8 @@ export class SessionManager {
       labels: params.labels,
       cwd,
       profileId: profile.id,
-      model: params.model ?? null,
-      permissionMode: params.permissionMode,
+      model: model ?? null,
+      permissionMode,
       origin: "app",
       status: "starting",
       endReason: null,
@@ -185,6 +191,7 @@ export class SessionManager {
       inputTokens: 0,
       outputTokens: 0,
       lastMessagePreview: null,
+      awaitingReply: false,
       launch,
     };
     await this.preflight(profile, actor, row.id);
@@ -205,13 +212,15 @@ export class SessionManager {
     if (live && !live.input.isClosed && !live.stopping) {
       live.idleTimer?.cancel();
       live.idleTimer = null;
+      live.lastAssistantText = null;
       this.appendTimeline(sessionId, "user_message", text);
       live.input.pushText(text);
-      this.patch(sessionId, { status: "running", endReason: null, errorMessage: null });
+      this.patch(sessionId, { status: "running", endReason: null, errorMessage: null, awaitingReply: false });
       return this.get(sessionId);
     }
     if (live) throw new EngineError("CONFLICT", "The session is shutting down; try again in a moment.");
-    if (row.origin === "hook" && !["done", "error", "usage_limit"].includes(row.status)) {
+    const externalRunEnded = ["done", "error", "usage_limit"].includes(row.status) || (row.awaitingReply && row.endReason !== null);
+    if (row.origin === "hook" && !externalRunEnded) {
       throw new EngineError("CONFLICT", "This session is still running in an external claude -p process.");
     }
     // A new prompt supersedes anything deferred: Claude answers the prompt and skips the parked call.
@@ -219,9 +228,13 @@ export class SessionManager {
       if (request.state === "deferred" || request.state === "open") this.cancelRequest(request, actor.id);
     }
     const profile = this.profile(row.profileId);
+    if (row.origin === "hook") {
+      // Resuming runs Claude inside the hub in that directory, so the allowlist applies as for a new session.
+      await assertAllowedDirectory(row.cwd, this.deps.settings().allowedDirectories);
+    }
     await this.preflight(profile, actor, sessionId);
     this.appendTimeline(sessionId, "user_message", text);
-    this.patch(sessionId, { status: "starting", endReason: null, errorMessage: null, usageLimit: null });
+    this.patch(sessionId, { status: "starting", endReason: null, errorMessage: null, usageLimit: null, awaitingReply: false });
     this.launch(row, profile, { kind: "resume", prompt: text });
     return this.get(sessionId);
   }
@@ -260,6 +273,31 @@ export class SessionManager {
     return this.get(sessionId);
   }
 
+  /** Changes model and/or permission mode: live on a running process, and for every later resume. */
+  async configure(sessionId: string, change: { model?: string | null | undefined; permissionMode?: PermissionModeValue | undefined }, actor: Actor): Promise<SessionSummary> {
+    const row = this.requireRow(sessionId);
+    const launch: LaunchConfig = { ...row.launch };
+    const patch: Partial<SessionRow> = {};
+    if (change.model !== undefined) {
+      if (change.model === null) delete launch.model;
+      else launch.model = change.model;
+      patch.model = change.model;
+    }
+    if (change.permissionMode !== undefined) {
+      launch.permissionMode = change.permissionMode;
+      patch.permissionMode = change.permissionMode;
+    }
+    this.deps.store.updateSession(sessionId, { launch });
+    const query = this.live.get(sessionId)?.query;
+    if (query) {
+      if (change.model !== undefined) await query.setModel(change.model ?? undefined);
+      if (change.permissionMode !== undefined) await query.setPermissionMode(change.permissionMode);
+    }
+    this.audit(actor, "session.configure", sessionId, null, JSON.stringify(change));
+    this.patch(sessionId, patch);
+    return this.get(sessionId);
+  }
+
   async answer(sessionId: string, requestId: string, answer: RequestAnswer, actor: Actor): Promise<PendingRequest> {
     const request = this.deps.store.getRequest(requestId);
     if (!request || request.sessionId !== sessionId) throw new EngineError("NOT_FOUND", "Request not found");
@@ -288,6 +326,7 @@ export class SessionManager {
   recover(): void {
     for (const row of this.deps.store.sessionsWithStatus(LIVE_STATUSES)) {
       if (row.origin === "hook") continue; // hook sessions belong to external processes and report their own end
+      if (row.awaitingReply) continue; // a plain-text question survives restarts; the reply resumes the session
       this.deps.store.updateSession(row.id, { status: "error", endReason: "engine_restart", errorMessage: "Session Hub restarted while this session was running." });
     }
     for (const request of this.deps.store.requestsInState("open")) {
@@ -314,12 +353,21 @@ export class SessionManager {
     this.patch(sessionId, { status, endReason });
   }
 
+  compatUpdate(sessionId: string, patch: Partial<SessionRow>): void {
+    this.patch(sessionId, patch);
+  }
+
   compatEnd(sessionId: string, reason: string): void {
     for (const request of this.deps.store.requestsForSession(sessionId)) {
       if (request.state === "open") this.cancelRequest(request, "hook");
     }
     const row = this.deps.store.getSession(sessionId);
     if (!row || row.status === "error" || row.status === "usage_limit") return;
+    if (row.awaitingReply) {
+      // The external process is gone but its question stands; a reply resumes it inside the hub.
+      this.patch(sessionId, { endReason: "completed" });
+      return;
+    }
     this.patch(sessionId, { status: "done", endReason: "completed" });
     this.appendTimeline(sessionId, "notice", `Session ended (${reason}).`);
     this.deps.lifecycle.lifecycle("session.completed", this.get(sessionId), row.lastMessagePreview);
@@ -362,6 +410,7 @@ export class SessionManager {
       preApproved: new Set(),
       subagentSummaries: new Map(),
       backgroundTasks: 0,
+      lastAssistantText: null,
     };
     this.live.set(row.id, live);
     if (mode.prompt !== null) live.input.pushText(mode.prompt);
@@ -396,9 +445,7 @@ export class SessionManager {
       // Resuming with -p does not restore the stored mode, so it is passed on every launch.
       permissionMode: launch.permissionMode as NonNullable<Options["permissionMode"]>,
       settingSources: ["user", "project", "local"],
-      systemPrompt: launch.appendSystemPrompt
-        ? { type: "preset", preset: "claude_code", append: launch.appendSystemPrompt }
-        : { type: "preset", preset: "claude_code" },
+      systemPrompt: this.systemPrompt(launch.appendSystemPrompt),
       canUseTool: this.canUseTool(row.id, live),
       hooks: { PreToolUse: [{ matcher: "AskUserQuestion", hooks: [askHook], timeout: HOOK_WAIT_TIMEOUT_SECONDS, onFailure: "block" }] },
       // Full subagent transcripts (text and thinking, not just tool calls) for the nested conversation view.
@@ -414,6 +461,11 @@ export class SessionManager {
     if (launch.maxTurns) options.maxTurns = launch.maxTurns;
     if (launch.maxBudgetUsd) options.maxBudgetUsd = launch.maxBudgetUsd;
     return options;
+  }
+
+  private systemPrompt(append: string | undefined): NonNullable<Options["systemPrompt"]> {
+    const parts = [this.deps.settings().askViaTool ? ASK_TOOL_HINT : null, append ?? null].filter((part): part is string => Boolean(part));
+    return parts.length > 0 ? { type: "preset", preset: "claude_code", append: parts.join("\n\n") } : { type: "preset", preset: "claude_code" };
   }
 
   private async resumeDeferred(sessionId: string, request: StoredRequest, answer: RequestAnswer, actor: Actor): Promise<void> {
@@ -627,6 +679,7 @@ export class SessionManager {
         if (state === "progress" && live.subagentSummaries.get(draft.parentToolUseId) === draft.text) continue;
         live.subagentSummaries.set(draft.parentToolUseId, draft.text);
       }
+      if (draft.kind === "assistant_text" && draft.parentToolUseId === null) live.lastAssistantText = draft.text;
       this.appendTimeline(sessionId, draft.kind, draft.text, draft);
     }
     const patch: Partial<SessionRow> = {};
@@ -691,10 +744,23 @@ export class SessionManager {
       this.deps.lifecycle.lifecycle("session.error", this.get(sessionId), result.text || null);
     } else {
       const endReason = result.subtype === "error_max_turns" ? "max_turns" : result.subtype === "error_max_budget_usd" ? "budget_exhausted" : "completed";
-      this.patch(sessionId, { status: "done", endReason, errorMessage: null });
-      this.deps.lifecycle.lifecycle("session.completed", this.get(sessionId), result.text || null);
+      if (endReason === "completed" && endsWithQuestion(live.lastAssistantText ?? result.text)) {
+        this.markAwaitingReply(sessionId, live.lastAssistantText ?? result.text);
+      } else {
+        this.patch(sessionId, { status: "done", endReason, errorMessage: null, awaitingReply: false });
+        this.deps.lifecycle.lifecycle("session.completed", this.get(sessionId), result.text || null);
+      }
     }
     this.scheduleIdleClose(live);
+  }
+
+  /** The turn ended on a plain-text question: wait for the owner instead of reporting "done". */
+  markAwaitingReply(sessionId: string, question: string): void {
+    this.patch(sessionId, { status: "waiting_input", awaitingReply: true, errorMessage: null });
+    const session = this.get(sessionId);
+    const line = question.trim().split(/\r?\n/).filter(Boolean).pop() ?? question;
+    this.deps.bus.emit({ type: "notify", title: `${session.name} soru soruyor`, body: truncateText(line, 200), sessionId });
+    this.deps.lifecycle.lifecycle("session.waiting", session, line);
   }
 
   private onBackgroundTasks(live: LiveSession, count: number): void {
@@ -729,7 +795,7 @@ export class SessionManager {
       this.deps.lifecycle.lifecycle("session.deferred", this.get(sessionId), null);
       return;
     }
-    if (live.stopping || live.limitStopped || row.status === "done" || row.status === "error" || row.status === "usage_limit") {
+    if (live.stopping || live.limitStopped || row.status === "done" || row.status === "error" || row.status === "usage_limit" || row.awaitingReply) {
       this.emitSession(sessionId);
       return;
     }

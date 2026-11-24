@@ -65,6 +65,9 @@ Errors use the body `{ "error": { "code", "message" } }`:
 
 `starting · running · waiting_input · waiting_permission · idle · done · error · usage_limit · deferred`
 
+`waiting_input` with `awaitingReply: true` means the turn ended on a **plain-text question** (no card).
+Answer it with `POST /v1/sessions/:id/message` (or `hubctl reply`); the session resumes.
+
 `endReason`: `completed · stopped_by_user · error · usage_limit · auth_blocked · max_turns · budget_exhausted · engine_restart · process_exit`
 
 ## Outgoing webhooks
@@ -94,11 +97,21 @@ A queue service stops its queue on `session.usage_limit`.
 ## hubctl
 
 ```bash
-hubctl run [--name N] [--label L]... -- <claude args>   # instead of `claude`; registers the run, injects hooks for it
-hubctl sessions [--status waiting_input,waiting_permission] [--label ci]
+hubctl run [--name N] [--label L]... [--no-question-hint] -- <claude args>   # instead of `claude`
+hubctl sessions [--status waiting_input,waiting_permission] [--label ci] [--json]
+hubctl requests [<session>] [--json]          # what is being asked: commands, questions, options
+hubctl answer <session> <request> allow|allow-session|deny [--message "why"]
+hubctl answer <session> <request> --answer 2 [--answer "1,3"]...   # one per question; number, label or free text
+hubctl reply <session> "use the staging config"                   # plain-text questions
 hubctl status
 hubctl hook <Event>                                     # used by installed hooks; reads the payload on stdin
 ```
+
+Session and request ids accept unique prefixes (e.g. `3f2a`).
+
+`hubctl run` also tells the model to end with one clear question when it needs you, because `-p` runs
+have no AskUserQuestion tool. Merge or skip this with `--no-question-hint`. With `--output-format json`
+or `stream-json`, it forwards the final result's cost and usage to the hub; output passes through unchanged.
 
 `hubctl run` passes the run's own hooks through `--settings`. If the hooks are also installed globally,
 the global copies step aside for that process, so nothing registers twice.

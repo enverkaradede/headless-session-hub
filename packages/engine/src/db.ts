@@ -88,6 +88,8 @@ const MIGRATIONS: readonly string[] = [
   `ALTER TABLE events ADD COLUMN parent_tool_use_id TEXT;
    CREATE INDEX events_parent ON events(session_id, parent_tool_use_id, seq);
    ALTER TABLE requests ADD COLUMN agent_id TEXT;`,
+  // v3: plain-text questions at the end of a turn.
+  `ALTER TABLE sessions ADD COLUMN awaiting_reply INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 /** Launch parameters kept so a closed session can be resumed with the same options. */
@@ -159,6 +161,7 @@ function toSession(row: Row): SessionRow {
     inputTokens: num(row, "input_tokens"),
     outputTokens: num(row, "output_tokens"),
     lastMessagePreview: strOrNull(row, "last_message_preview"),
+    awaitingReply: num(row, "awaiting_reply") === 1,
     launch: json<LaunchConfig>(row, "launch", { permissionMode: "default" }),
   };
 }
@@ -218,12 +221,14 @@ const SESSION_COLUMNS: Record<keyof SessionRow, string> = {
   inputTokens: "input_tokens",
   outputTokens: "output_tokens",
   lastMessagePreview: "last_message_preview",
+  awaitingReply: "awaiting_reply",
   launch: "launch",
 };
 const JSON_SESSION_FIELDS = new Set<keyof SessionRow>(["labels", "usageLimit", "launch"]);
 
 function encodeSessionValue(key: keyof SessionRow, value: unknown): SQLInputValue {
   if (JSON_SESSION_FIELDS.has(key)) return value == null ? null : JSON.stringify(value);
+  if (typeof value === "boolean") return value ? 1 : 0;
   return value as SQLInputValue;
 }
 

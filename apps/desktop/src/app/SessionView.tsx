@@ -1,12 +1,14 @@
 /** One session: header with status and stats, live timeline, pending request cards and the composer. */
 import type { PendingRequest, RequestAnswer, SessionSummary } from "@hub/protocol";
-import { ArrowUp, CircleAlert, Gauge, Hourglass, LoaderCircle, Play, Square, Tag } from "lucide-react";
+import { ArrowUp, CircleAlert, Gauge, Hourglass, LoaderCircle, MessageCircleQuestion, Play, Square, Tag } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
-import { ATTENTION, STATUS_LABEL, STATUS_TONE, epochToMs, formatCost, formatDateTime, formatTokens, timeAgo } from "../lib/format";
+import type { PermissionMode } from "@hub/protocol";
+import { ATTENTION, PERMISSION_MODES, STATUS_LABEL, STATUS_TONE, epochToMs, formatCost, formatDateTime, formatTokens, timeAgo } from "../lib/format";
+import { ModelPicker } from "../ui/ModelPicker";
 import { LOCAL, rpc } from "../lib/ipc";
 import { hub, timelineKey, useHub } from "../lib/store";
-import { Button, Chip, StatusDot, TextArea } from "../ui/kit";
+import { Button, Chip, Select, StatusDot, TextArea } from "../ui/kit";
 import { useToasts } from "../ui/toasts";
 import { PermissionCard, QuestionCard } from "./RequestCards";
 import { SubagentPane } from "./SubagentPane";
@@ -153,13 +155,42 @@ function SessionHeader({ session, device, deviceName, canOperate }: { session: S
             ))}
           </div>
         </div>
-        {stoppable && canOperate && (
-          <Button variant="danger" icon={Square} loading={stopping} onClick={() => void stop()}>
-            Durdur
-          </Button>
-        )}
+        <div className="flex shrink-0 flex-col items-end gap-2">
+          {stoppable && canOperate && (
+            <Button variant="danger" icon={Square} loading={stopping} onClick={() => void stop()}>
+              Durdur
+            </Button>
+          )}
+          {canOperate && <SessionControls session={session} device={device} />}
+        </div>
       </div>
     </header>
+  );
+}
+
+/** Model and working mode of this session: applied live to a running process, and kept for resumes. */
+function SessionControls({ session, device }: { session: SessionSummary; device: string }) {
+  const { push } = useToasts();
+  const configure = async (change: { model?: string | null; permissionMode?: PermissionMode }, label: string) => {
+    try {
+      await rpc(device, "sessions.configure", { sessionId: session.id, ...change });
+      push("success", session.live ? `${label} hemen uygulandı` : `${label} bir sonraki mesajda uygulanacak`);
+    } catch (err) {
+      push("error", err instanceof Error ? err.message : "Değiştirilemedi");
+    }
+  };
+  const mode = (PERMISSION_MODES.some((option) => option.value === session.permissionMode) ? session.permissionMode : "default") as PermissionMode;
+  return (
+    <div className="flex items-center gap-2">
+      <ModelPicker size="sm" value={session.model ?? ""} onChange={(next) => void configure({ model: next || null }, "Model")} />
+      <Select
+        label="Çalışma modu"
+        value={mode}
+        options={PERMISSION_MODES}
+        onChange={(next) => void configure({ permissionMode: next }, "Çalışma modu")}
+        className="h-7 text-[12px]"
+      />
+    </div>
   );
 }
 
@@ -205,6 +236,17 @@ function SessionBanners({ session, device, canOperate }: { session: SessionSumma
       </Banner>
     );
   }
+  if (session.awaitingReply) {
+    return (
+      <Banner tone="beacon" icon={<MessageCircleQuestion className="size-4" />}>
+        <div className="flex-1">
+          <div className="font-medium text-ink-50">Claude sana bir soru sordu</div>
+          {session.lastMessagePreview && <div className="mt-0.5 text-ink-200">{session.lastMessagePreview}</div>}
+          <div className="mt-1 text-[12px] text-ink-400">Cevabını aşağıya yaz; oturum geçmişiyle birlikte kaldığı yerden devam eder.</div>
+        </div>
+      </Banner>
+    );
+  }
   if (session.status === "deferred") {
     return (
       <Banner tone="violet" icon={<Hourglass className="size-4" />}>
@@ -215,8 +257,12 @@ function SessionBanners({ session, device, canOperate }: { session: SessionSumma
   return null;
 }
 
-function Banner({ tone, icon, children }: { tone: "rose" | "violet"; icon: React.ReactNode; children: React.ReactNode }) {
-  const tones = { rose: "border-rose-glow/30 bg-rose-glow/[0.07] text-rose-glow", violet: "border-violet-glow/30 bg-violet-glow/[0.07] text-violet-glow" };
+function Banner({ tone, icon, children }: { tone: "rose" | "violet" | "beacon"; icon: React.ReactNode; children: React.ReactNode }) {
+  const tones = {
+    rose: "border-rose-glow/30 bg-rose-glow/[0.07] text-rose-glow",
+    violet: "border-violet-glow/30 bg-violet-glow/[0.07] text-violet-glow",
+    beacon: "border-beacon-400/35 bg-beacon-400/[0.08] text-beacon-300 shadow-[0_0_40px_-20px_rgba(255,169,92,0.7)]",
+  };
   return (
     <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className={`mt-4 flex items-start gap-3 rounded-xl border p-4 text-[13px] ${tones[tone]}`}>
       <span className="mt-0.5">{icon}</span>
@@ -247,16 +293,18 @@ function Composer({ session, device, canOperate }: { session: SessionSummary; de
   const { push } = useToasts();
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
-  const externallyRunning = session.origin === "hook" && !["done", "error", "usage_limit"].includes(session.status);
+  const externallyRunning = session.origin === "hook" && !["done", "error", "usage_limit"].includes(session.status) && !(session.awaitingReply && session.endReason !== null);
   const resumes = !session.live;
   const disabled = !canOperate || externallyRunning;
   const placeholder = !canOperate
     ? "Bu cihazda salt okunur yetkin var."
     : externallyRunning
       ? "Bu oturum harici bir claude -p sürecinde çalışıyor; bitince mesajla devam ettirebilirsin."
-      : resumes
-        ? "Mesaj yaz; oturum geçmişiyle birlikte kaldığı yerden devam eder…"
-        : "Claude'a mesaj gönder…";
+      : session.awaitingReply
+        ? "Cevabını yaz…"
+        : resumes
+          ? "Mesaj yaz; oturum geçmişiyle birlikte kaldığı yerden devam eder…"
+          : "Claude'a mesaj gönder…";
 
   const send = async () => {
     const trimmed = text.trim();
@@ -290,7 +338,7 @@ function Composer({ session, device, canOperate }: { session: SessionSummary; de
           onChange={(event) => setText(event.target.value)}
           onKeyDown={onKeyDown}
           placeholder={placeholder}
-          className="max-h-48 min-h-[42px] flex-1 disabled:opacity-50"
+          className={`max-h-48 min-h-[42px] flex-1 disabled:opacity-50 ${session.awaitingReply ? "border-beacon-400/50 shadow-[0_0_0_3px_rgba(255,169,92,0.12)]" : ""}`}
         />
         <Button variant="primary" size="lg" icon={resumes ? Play : ArrowUp} loading={sending} disabled={disabled || !text.trim()} onClick={() => void send()} className="h-[42px]">
           {resumes ? "Devam ettir" : "Gönder"}

@@ -84,6 +84,8 @@ export const SessionSummary = z.object({
   lastMessagePreview: z.string().nullable(),
   /** True while a live process can take input; false means a message triggers --resume. */
   live: z.boolean(),
+  /** The turn ended on a plain-text question (no AskUserQuestion card); a message answers it. */
+  awaitingReply: z.boolean(),
 });
 export type SessionSummary = z.infer<typeof SessionSummary>;
 
@@ -240,6 +242,11 @@ export const EngineSettings = z.object({
   summaryOnlyForPeers: z.boolean(),
   eventRetentionDays: z.number().int().min(1).max(3650),
   claudePath: z.string().nullable(),
+  /** Model for new sessions unless the start request names one; null = the profile's own default. */
+  defaultModel: z.string().trim().min(1).max(100).nullable(),
+  defaultPermissionMode: PermissionMode,
+  /** Ask app sessions to use AskUserQuestion (a card in the hub) instead of plain-text questions. */
+  askViaTool: z.boolean(),
   webhooks: z.array(WebhookConfig),
 });
 export type EngineSettings = z.infer<typeof EngineSettings>;
@@ -255,6 +262,9 @@ export const DEFAULT_SETTINGS: EngineSettings = {
   summaryOnlyForPeers: false,
   eventRetentionDays: 30,
   claudePath: null,
+  defaultModel: null,
+  defaultPermissionMode: "default",
+  askViaTool: true,
   webhooks: [],
 };
 
@@ -282,7 +292,8 @@ export const StartSessionParams = z.object({
   profileId: z.string().optional(),
   labels: z.array(Label).max(MAX_LABELS).default([]),
   appendSystemPrompt: z.string().max(MAX_PROMPT_LENGTH).optional(),
-  permissionMode: PermissionMode.default("default"),
+  /** Omitted: the engine's defaultPermissionMode. */
+  permissionMode: PermissionMode.optional(),
   model: z.string().max(100).optional(),
   allowedTools: z.array(z.string().max(200)).max(200).optional(),
   disallowedTools: z.array(z.string().max(200)).max(200).optional(),
@@ -324,6 +335,13 @@ export const MessageParams = z.object({
 
 export const SessionIdParams = z.object({ sessionId: z.string().uuid() });
 
+/** Change a session's model or permission mode; applied live when the process runs, kept for resumes. */
+export const ConfigureSessionParams = z.object({
+  sessionId: z.string().uuid(),
+  model: z.string().trim().min(1).max(100).nullable().optional(),
+  permissionMode: PermissionMode.optional(),
+});
+
 export const UpdateSessionParams = z.object({
   sessionId: z.string().uuid(),
   name: z.string().trim().max(MAX_NAME_LENGTH).optional(),
@@ -342,6 +360,7 @@ export const RpcSchemas = {
   "sessions.answer": AnswerParams,
   "sessions.stop": SessionIdParams,
   "sessions.update": UpdateSessionParams,
+  "sessions.configure": ConfigureSessionParams,
   "settings.get": z.object({}),
   "settings.update": EngineSettings.partial(),
   "hooks.status": z.object({}),
@@ -402,6 +421,7 @@ export interface RpcResults {
   "sessions.answer": PendingRequest;
   "sessions.stop": SessionSummary;
   "sessions.update": SessionSummary;
+  "sessions.configure": SessionSummary;
   "settings.get": EngineSettings;
   "settings.update": EngineSettings;
   "hooks.status": HooksStatus;

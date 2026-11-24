@@ -1,5 +1,5 @@
 /** Display helpers and Turkish copy for statuses. Kept in one place so the UI can be localised later. */
-import type { PeerAccess, SessionStatus } from "@hub/protocol";
+import type { PeerAccess, PermissionMode, SessionStatus } from "@hub/protocol";
 import type { Tone } from "../ui/kit";
 
 export const STATUS_LABEL: Record<SessionStatus, string> = {
@@ -82,3 +82,19 @@ export function baseName(path: string): string {
 export function epochToMs(value: number): number {
   return value < 1e12 ? value * 1000 : value;
 }
+
+/** Model choices offered everywhere; "" means "the profile's own default". Any other id can be typed. */
+export const MODEL_PRESETS: ReadonlyArray<{ value: string; label: string }> = [
+  { value: "", label: "Profil varsayılanı" },
+  { value: "opus", label: "Opus" },
+  { value: "sonnet", label: "Sonnet" },
+  { value: "haiku", label: "Haiku" },
+];
+
+export const PERMISSION_MODES: ReadonlyArray<{ value: PermissionMode; label: string; hint: string }> = [
+  { value: "default", label: "Sor (manuel)", hint: "İzin gerektiren her adım sana sorulur." },
+  { value: "acceptEdits", label: "Düzenlemeleri kabul et", hint: "Dosya düzenlemeleri otomatik; komutlar yine sorulur." },
+  { value: "auto", label: "Otomatik", hint: "Bir sınıflandırıcı güvenli adımları onaylar, riskliler sorulur." },
+  { value: "plan", label: "Plan", hint: "Sadece plan çıkarır, hiçbir şey çalıştırmaz." },
+  { value: "dontAsk", label: "Sorma", hint: "İzinli olmayan her adımı reddeder; hiç soru gelmez." },
+];

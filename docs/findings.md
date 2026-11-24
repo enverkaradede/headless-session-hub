@@ -24,6 +24,9 @@ Script: `packages/engine/spike/sdk-spike.mjs`. Raw reports land in `packages/eng
 
 | 16 | P2P behind HTTPS-inspecting corporate networks | ❌→✅ On an office network that re-signs TLS with an IT-installed root, iroh's embedded Mozilla roots rejected the relay and pkarr: `invalid peer certificate: UnknownIssuer`, so the relay never connected. Fix: iroh feature `platform-verifier` + `ca_tls_config(CaTlsConfig::system())`, which trusts the OS certificate store like browsers do. iroh peer connections keep their own end-to-end authentication. | Windows `shell.log`, 2026-11-24 |
 
+| 17 | AskUserQuestion in `claude -p` | ❌ Not offered at all, with or without a PermissionRequest hook (`init.tools`). A `-p` run therefore asks in **plain text** and its session looked "done". Fix: the end of each turn (app sessions) and `Stop.last_assistant_message` (hook sessions) are checked for a trailing question, and the session becomes `waiting_input` + `awaitingReply`. The reply resumes it with `--resume`. `hubctl run` adds an instruction to end with one clear question; app sessions are asked to use AskUserQuestion (setting `askViaTool`). | probe 2026-11-24 |
+| 18 | Usage of hook sessions | Hooks carry no tokens or cost. The SDK's `getSessionMessages` (deduplicated by API message id) matched the CLI's own `modelUsage` exactly (52 287 in / 54 out). It runs in a helper child under the profile's `CLAUDE_CONFIG_DIR`. Cost only exists in the CLI's final result: `hubctl run` captures it when `--output-format json\|stream-json`. | real run |
+
 ## Environment notes
 
 - This Mac runs two Claude accounts through `CLAUDE_CONFIG_DIR` (`~/.claude-work`, `~/.claude-personal`); `claude` itself is an alias. The app therefore supports **profiles** (name + config dir), and auth checks and hook installs happen per profile.

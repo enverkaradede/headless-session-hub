@@ -4,18 +4,13 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { ChevronDown, FolderOpen, Rocket, ShieldAlert } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { PERMISSION_MODES } from "../lib/format";
 import { LOCAL, rpc } from "../lib/ipc";
+import { ModelPicker } from "../ui/ModelPicker";
 import { hub, useHub } from "../lib/store";
 import { Button, Card, Input, Row, SectionHeader, Segmented, Select, TextArea } from "../ui/kit";
 import { useToasts } from "../ui/toasts";
 
-const PERMISSION_MODES: ReadonlyArray<{ value: PermissionMode; label: string }> = [
-  { value: "default", label: "Varsayılan (sor)" },
-  { value: "acceptEdits", label: "Dosya düzenlemelerini kabul et" },
-  { value: "plan", label: "Plan modu (çalıştırma yok)" },
-  { value: "auto", label: "Otomatik (sınıflandırıcı)" },
-  { value: "dontAsk", label: "Sorma, izinli değilse reddet" },
-];
 
 type WaitMode = WaitPolicy["mode"] | "inherit";
 const WAIT_MODES: ReadonlyArray<{ value: WaitMode; label: string }> = [
@@ -72,6 +67,8 @@ export function NewSession() {
       .then((next) => {
         setSettings(next);
         setProfileId(next.defaultProfileId);
+        setPermissionMode(next.defaultPermissionMode);
+        setModel(next.defaultModel ?? "");
         setCwd((current) => (current && next.allowedDirectories.some((dir) => current.startsWith(dir)) ? current : (next.allowedDirectories[0] ?? "")));
       })
       .catch((err: unknown) => push("error", err instanceof Error ? err.message : "Ayarlar okunamadı"));
@@ -185,8 +182,11 @@ export function NewSession() {
             <Row label="Etiketler" hint="Virgülle ayır; listede filtrelemek ve webhook'larda ayırt etmek için.">
               <Input value={labels} onChange={(event) => setLabels(event.target.value)} placeholder="ci, backend" className="w-[260px]" />
             </Row>
-            <Row label="İzin modu" hint="Session Hub izinleri gevşetmez; sadece 'sor' durumuna düşenleri sana getirir.">
-              <Select label="İzin modu" value={permissionMode} options={PERMISSION_MODES} onChange={setPermissionMode} />
+            <Row label="Model" hint="Varsayılanı Ayarlar → Davranış'tan değiştirebilirsin; oturum çalışırken de değişebilir.">
+              <ModelPicker value={model} onChange={setModel} />
+            </Row>
+            <Row label="Çalışma modu" hint={`${PERMISSION_MODES.find((option) => option.value === permissionMode)?.hint ?? ""} Session Hub izinleri gevşetmez.`}>
+              <Select label="Çalışma modu" value={permissionMode} options={PERMISSION_MODES} onChange={setPermissionMode} />
             </Row>
             <Row label="Cevap bekleme" hint="Soru ya da izin cevapsız kalırsa ne olsun.">
               <div className="flex items-center gap-2">
@@ -209,9 +209,6 @@ export function NewSession() {
               {advanced && (
                 <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ duration: 0.25, ease: [0.16, 1, 0.3, 1] }} className="overflow-hidden">
                   <Card className="mt-3">
-                    <Row label="Model" hint="Boş: profilin varsayılanı. Örn: opus, sonnet, haiku.">
-                      <Input value={model} onChange={(event) => setModel(event.target.value)} placeholder="varsayılan" className="w-[200px]" mono />
-                    </Row>
                     <Row label="En fazla adım" hint="Bu kadar turdan sonra durur.">
                       <Input value={maxTurns} onChange={(event) => setMaxTurns(event.target.value.replace(/[^0-9]/g, ""))} placeholder="sınırsız" className="w-[120px]" />
                     </Row>

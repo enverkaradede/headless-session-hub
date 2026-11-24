@@ -9,7 +9,8 @@ import { hostname, platform } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { parseArgs } from "node:util";
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { execFile } from "node:child_process";
+import { getSessionMessages, query } from "@anthropic-ai/claude-agent-sdk";
 import { PROTOCOL_VERSION, RpcRequestEnvelope, type AuthState, type ClaudeProfile, type EngineInfo, type EngineOutbound } from "@hub/protocol";
 import { LocalApi } from "./api/http.ts";
 import { apiKeySourceIsNonSubscription, authAllowsStart, buildChildEnv, claudeVersion, readAuthState, resolveClaudeExecutable } from "./claude.ts";
@@ -17,7 +18,7 @@ import { systemClock } from "./clock.ts";
 import { Store } from "./db.ts";
 import { EngineError } from "./errors.ts";
 import { EventBus, type LifecycleSink } from "./events.ts";
-import { CompatLayer } from "./hooks/compat.ts";
+import { CompatLayer, type SessionUsage, type UsageReader } from "./hooks/compat.ts";
 import { log } from "./log.ts";
 import { peerEvent, RpcDispatcher } from "./rpc.ts";
 import { SessionManager, type ClaudeHost } from "./sessions/manager.ts";
@@ -90,8 +91,71 @@ async function writeDiscovery(dataDir: string, port: number, token: string): Pro
   await rename(temp, file);
 }
 
+const USAGE_READ_TIMEOUT_MS = 20_000;
+
+/** Helper mode: print token totals of one session (run with the profile's CLAUDE_CONFIG_DIR) and exit. */
+async function printSessionUsage(sessionId: string, dir: string | undefined): Promise<void> {
+  const messages = await getSessionMessages(sessionId, dir ? { dir } : {});
+  const seen = new Set<string>();
+  const usage: SessionUsage = { inputTokens: 0, outputTokens: 0, model: null };
+  for (const entry of messages) {
+    if (entry.type !== "assistant") continue;
+    const message = entry.message as { id?: string; model?: string; usage?: Record<string, number | undefined> } | null;
+    if (!message?.usage) continue;
+    // A streamed reply is stored as several entries sharing one API message id and one usage record.
+    const key = message.id ?? entry.uuid;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    usage.inputTokens += (message.usage.input_tokens ?? 0) + (message.usage.cache_read_input_tokens ?? 0) + (message.usage.cache_creation_input_tokens ?? 0);
+    usage.outputTokens += message.usage.output_tokens ?? 0;
+    usage.model ??= message.model ?? null;
+  }
+  process.stdout.write(JSON.stringify(usage));
+}
+
+/** Reads usage by running this engine in helper mode under the session's profile. */
+function usageReader(allowNonSubscriptionAuth: () => boolean): UsageReader {
+  return (sessionId, cwd, profile) =>
+    new Promise((resolve) => {
+      const script = process.argv[1];
+      if (!script) {
+        resolve(null);
+        return;
+      }
+      execFile(
+        process.execPath,
+        ["--no-warnings=ExperimentalWarning", script, "--session-usage", sessionId, "--session-dir", cwd],
+        { env: buildChildEnv({ profile, allowNonSubscriptionAuth: allowNonSubscriptionAuth() }), timeout: USAGE_READ_TIMEOUT_MS, windowsHide: true, encoding: "utf8" },
+        (err, stdout) => {
+          if (err) {
+            log.warn("reading session usage failed", { sessionId, err });
+            resolve(null);
+            return;
+          }
+          try {
+            resolve(JSON.parse(stdout) as SessionUsage);
+          } catch {
+            resolve(null);
+          }
+        },
+      );
+    });
+}
+
 async function main(): Promise<void> {
-  const { values } = parseArgs({ options: { "data-dir": { type: "string" }, hubctl: { type: "string" }, "api-port": { type: "string" } } });
+  const { values } = parseArgs({
+    options: {
+      "data-dir": { type: "string" },
+      hubctl: { type: "string" },
+      "api-port": { type: "string" },
+      "session-usage": { type: "string" },
+      "session-dir": { type: "string" },
+    },
+  });
+  if (values["session-usage"]) {
+    await printSessionUsage(values["session-usage"], values["session-dir"]);
+    return;
+  }
   const dataDir = values["data-dir"];
   if (!dataDir || !path.isAbsolute(dataDir)) throw new Error("--data-dir <absolute path> is required");
   await mkdir(dataDir, { recursive: true });
@@ -135,7 +199,7 @@ async function main(): Promise<void> {
   };
 
   const rpc = new RpcDispatcher({ manager, settings, info, refreshAuth, hubctlPath });
-  const compat = new CompatLayer(manager, systemClock, () => settings.get());
+  const compat = new CompatLayer(manager, systemClock, () => settings.get(), usageReader(() => settings.get().allowNonSubscriptionAuth));
   const token = randomBytes(32).toString("hex");
   const api = new LocalApi(token, rpc, compat);
   apiPort = await api.listen(values["api-port"] ? Number(values["api-port"]) : 0);
