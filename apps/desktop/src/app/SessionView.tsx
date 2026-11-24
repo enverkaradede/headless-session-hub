@@ -10,6 +10,7 @@ import { LOCAL, rpc } from "../lib/ipc";
 import { hub, timelineKey, useHub } from "../lib/store";
 import { Button, Chip, Select, StatusDot, TextArea } from "../ui/kit";
 import { useToasts } from "../ui/toasts";
+import { CommandPalette, useCommandPalette } from "./CommandPalette";
 import { PermissionCard, QuestionCard } from "./RequestCards";
 import { SubagentPane } from "./SubagentPane";
 import { buildSubagentIndex } from "./subagents";
@@ -107,7 +108,7 @@ export function SessionView({ device, sessionId }: { device: string; sessionId: 
         </div>
       </div>
       </div>
-      <Composer session={session} device={device} canOperate={canOperate} />
+      <Composer session={session} device={device} deviceName={deviceName} canOperate={canOperate} />
     </div>
   );
 }
@@ -307,10 +308,17 @@ const PLACEHOLDER: Record<SendMode, string> = {
   resume: "Mesaj yaz; oturum geçmişiyle birlikte kaldığı yerden devam eder…",
 };
 
-function Composer({ session, device, canOperate }: { session: SessionSummary; device: string; canOperate: boolean }) {
+function Composer({ session, device, deviceName, canOperate }: { session: SessionSummary; device: string; deviceName: string | null; canOperate: boolean }) {
   const { push } = useToasts();
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const field = useRef<HTMLTextAreaElement>(null);
+  // The session already runs on one device and profile: only its commands and skills apply.
+  const sources = useMemo(
+    () => (canOperate ? [{ device, deviceLabel: deviceName ?? "Bu cihaz", profileId: session.profileId, profileLabel: session.profileId, cwd: session.cwd || null }] : []),
+    [canOperate, device, deviceName, session.profileId, session.cwd],
+  );
+  const palette = useCommandPalette({ text, setText, field, sources });
   const mode = sendMode(session);
   const placeholder = !canOperate ? "Bu cihazda salt okunur yetkin var." : session.awaitingReply && mode !== "queue" ? "Cevabını yaz…" : PLACEHOLDER[mode];
   const button = mode === "queue" ? { label: "Sıraya al", icon: ListPlus } : mode === "resume" ? { label: "Devam ettir", icon: Play } : { label: "Gönder", icon: ArrowUp };
@@ -332,6 +340,7 @@ function Composer({ session, device, canOperate }: { session: SessionSummary; de
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (palette.handleKey(event)) return;
     if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault();
       void send();
@@ -342,15 +351,23 @@ function Composer({ session, device, canOperate }: { session: SessionSummary; de
     <div className="border-t border-white/[0.05] bg-harbor-900/40 backdrop-blur-xl">
       <QueuedMessages session={session} device={device} canOperate={canOperate} />
       <div className="mx-auto flex max-w-[860px] items-end gap-3 px-8 py-4">
-        <TextArea
-          rows={Math.min(8, Math.max(1, text.split("\n").length))}
-          value={text}
-          disabled={!canOperate}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={onKeyDown}
-          placeholder={placeholder}
-          className={`max-h-48 min-h-[42px] flex-1 disabled:opacity-50 ${session.awaitingReply || mode === "answer_card" ? "border-beacon-400/50 shadow-[0_0_0_3px_rgba(255,169,92,0.12)]" : ""}`}
-        />
+        <div className="relative flex-1">
+          <TextArea
+            ref={field}
+            rows={Math.min(8, Math.max(1, text.split("\n").length))}
+            value={text}
+            disabled={!canOperate}
+            onChange={(event) => {
+              setText(event.target.value);
+              palette.trackCaret(event);
+            }}
+            onSelect={palette.trackCaret}
+            onKeyDown={onKeyDown}
+            placeholder={placeholder}
+            className={`max-h-48 min-h-[42px] disabled:opacity-50 ${session.awaitingReply || mode === "answer_card" ? "border-beacon-400/50 shadow-[0_0_0_3px_rgba(255,169,92,0.12)]" : ""}`}
+          />
+          <CommandPalette controller={palette} placement="above" showProfile={false} />
+        </div>
         <Button variant="primary" size="lg" icon={button.icon} loading={sending} disabled={!canOperate || !text.trim()} onClick={() => void send()} className="h-[42px]">
           {button.label}
         </Button>

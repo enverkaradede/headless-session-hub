@@ -16,7 +16,11 @@ describe("buildChildEnv", () => {
 
   it("strips API-key, provider and nesting variables by default", () => {
     const env = buildChildEnv({ profile: null, allowNonSubscriptionAuth: false, base });
-    expect(env).toEqual({ PATH: "/usr/bin" });
+    expect(env).toEqual({ PATH: "/usr/bin", HUB_MANAGED_SESSION: "1" });
+  });
+
+  it("marks the process as hub-managed so globally installed hooks leave it alone", () => {
+    expect(buildChildEnv({ profile: null, allowNonSubscriptionAuth: false, base }).HUB_MANAGED_SESSION).toBe("1");
   });
 
   it("never lets a caller re-inject an API key through extra env", () => {

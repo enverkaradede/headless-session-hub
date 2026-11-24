@@ -22,6 +22,7 @@ import { CompatLayer, type SessionUsage, type UsageReader } from "./hooks/compat
 import { log } from "./log.ts";
 import { peerEvent, RpcDispatcher } from "./rpc.ts";
 import { SessionManager, type ClaudeHost } from "./sessions/manager.ts";
+import { CatalogService } from "./catalog.ts";
 import { SettingsService } from "./settings.ts";
 import { WebhookDispatcher } from "./webhooks.ts";
 
@@ -198,7 +199,15 @@ async function main(): Promise<void> {
     return states;
   };
 
-  const rpc = new RpcDispatcher({ manager, settings, info, refreshAuth, hubctlPath });
+  const catalog = new CatalogService({
+    queryFn: query,
+    clock: systemClock,
+    settings: () => settings.get(),
+    executable: () => claude.executable(),
+    childEnv: (profile) => claude.childEnv(profile, undefined),
+    neutralDir: path.join(dataDir, "catalog-probe"),
+  });
+  const rpc = new RpcDispatcher({ manager, settings, info, refreshAuth, hubctlPath, catalog });
   const compat = new CompatLayer(manager, systemClock, () => settings.get(), usageReader(() => settings.get().allowNonSubscriptionAuth));
   const token = randomBytes(32).toString("hex");
   const api = new LocalApi(token, rpc, compat);

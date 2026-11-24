@@ -353,6 +353,35 @@ export const UpdateSessionParams = z.object({
   labels: z.array(Label).max(MAX_LABELS).optional(),
 });
 
+// ── Slash commands and skills ────────────────────────────────────────────────
+
+/** One entry of the `/` menu: a Claude Code built-in command, or a skill / custom command of a profile. */
+export const CatalogCommand = z.object({
+  name: z.string(),
+  description: z.string(),
+  argumentHint: z.string(),
+  /** Claude Code's own command; false for skills and commands defined by the user, a project or a plugin. */
+  builtin: z.boolean(),
+});
+export type CatalogCommand = z.infer<typeof CatalogCommand>;
+
+export const CatalogParams = z.object({
+  profileId: z.string().optional(),
+  /** Adds the project's own skills; must be inside an allowed directory. */
+  cwd: z.string().min(1).max(4096).optional(),
+  /** Skip the cache (the owner just added a skill). */
+  refresh: z.boolean().optional(),
+});
+export type CatalogParams = z.infer<typeof CatalogParams>;
+
+export const Catalog = z.object({
+  profileId: z.string(),
+  cwd: z.string().nullable(),
+  commands: z.array(CatalogCommand),
+  fetchedAt: z.number().int(),
+});
+export type Catalog = z.infer<typeof Catalog>;
+
 /** Every RPC method, its params schema. Results are typed in RpcResults. */
 export const RpcSchemas = {
   "engine.info": z.object({}),
@@ -367,6 +396,7 @@ export const RpcSchemas = {
   "sessions.update": UpdateSessionParams,
   "sessions.configure": ConfigureSessionParams,
   "sessions.clearQueue": SessionIdParams,
+  "catalog.list": CatalogParams,
   "settings.get": z.object({}),
   "settings.update": EngineSettings.partial(),
   "hooks.status": z.object({}),
@@ -429,6 +459,7 @@ export interface RpcResults {
   "sessions.update": SessionSummary;
   "sessions.configure": SessionSummary;
   "sessions.clearQueue": SessionSummary;
+  "catalog.list": Catalog;
   "settings.get": EngineSettings;
   "settings.update": EngineSettings;
   "hooks.status": HooksStatus;

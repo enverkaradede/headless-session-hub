@@ -106,22 +106,24 @@ export function Button({ variant = "ghost", icon: Icon, loading = false, size = 
   );
 }
 
-export function Select<T extends string>({ value, options, onChange, label, className = "" }: {
+export function Select<T extends string>({ value, options, onChange, label, className = "", disabled = false }: {
   value: T;
   options: ReadonlyArray<{ value: T; label: string }>;
   onChange: (next: T) => void;
   label: string;
   className?: string;
+  disabled?: boolean;
 }) {
   return (
     <select
       aria-label={label}
       value={value}
+      disabled={disabled}
       onChange={(event) => {
         const next = options.find((option) => option.value === event.target.value);
         if (next) onChange(next.value);
       }}
-      className={`h-8 rounded-lg border border-white/10 bg-harbor-900 px-2.5 pr-8 text-[13px] text-ink-50 outline-none focus:border-beacon-400/60 ${className}`}
+      className={`h-8 rounded-lg border border-white/10 bg-harbor-900 px-2.5 pr-8 text-[13px] text-ink-50 outline-none focus:border-beacon-400/60 disabled:opacity-50 ${className}`}
     >
       {options.map((option) => (
         <option key={option.value} value={option.value}>
@@ -179,7 +181,7 @@ export function Input({ className = "", mono = false, ...rest }: React.InputHTML
   return <input spellCheck={false} autoCorrect="off" autoCapitalize="off" {...rest} className={`${fieldBase} h-9 ${mono ? "font-mono text-[12.5px]" : ""} ${className}`} />;
 }
 
-export function TextArea({ className = "", ...rest }: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
+export function TextArea({ className = "", ...rest }: React.ComponentProps<"textarea">) {
   return <textarea {...rest} className={`${fieldBase} w-full resize-none py-2.5 leading-relaxed ${className}`} />;
 }
 

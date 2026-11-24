@@ -1,5 +1,6 @@
 import type { Caller, PeerAccess, TimelineEvent } from "@hub/protocol";
 import { describe, expect, it } from "vitest";
+import { CatalogService } from "../src/catalog.ts";
 import { maskTimelineForPeer, RpcDispatcher } from "../src/rpc.ts";
 import { SettingsService } from "../src/settings.ts";
 import { ACTOR, makeHarness, msg, waitFor } from "./helpers.ts";
@@ -28,6 +29,14 @@ function harnessWithRpc() {
     info: () => ({ protocolVersion: 1, engineVersion: "t", hostname: "h", platform: "darwin", claudePath: "/secret/path", claudeVersion: "x", auth: [], apiPort: 1234 }),
     refreshAuth: async () => [],
     hubctlPath: null,
+    catalog: new CatalogService({
+      queryFn: h.fake.queryFn,
+      clock: h.clock,
+      settings: () => settings.get(),
+      executable: async () => "/usr/local/bin/claude",
+      childEnv: () => ({}),
+      neutralDir: h.workDir,
+    }),
   });
   return { ...h, rpc, settings };
 }

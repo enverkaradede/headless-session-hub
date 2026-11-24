@@ -11,6 +11,11 @@ const MAX_CLI_OUTPUT_BYTES = 1024 * 1024;
 const SHIM_EXTENSIONS = new Set([".cmd", ".bat", ".ps1"]);
 /** Set by Claude Code inside its own sessions; a nested CLI would treat itself as a child of ours. */
 const NESTING_ENV_VARS = ["CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT"];
+/**
+ * Set on every Claude process the hub starts itself. `hubctl hook` ignores such processes: the hub already drives
+ * them through the SDK, and globally installed hooks would otherwise list them a second time as claude -p sessions.
+ */
+export const MANAGED_SESSION_ENV = "HUB_MANAGED_SESSION";
 
 interface CliResult {
   exitCode: number;
@@ -112,6 +117,7 @@ export function buildChildEnv(options: ChildEnvOptions): NodeJS.ProcessEnv {
     env[name] = value;
   }
   if (options.profile?.configDir) env.CLAUDE_CONFIG_DIR = expandHome(options.profile.configDir);
+  env[MANAGED_SESSION_ENV] = "1";
   return env;
 }
 

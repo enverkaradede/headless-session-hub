@@ -33,6 +33,8 @@ const MAX_HOOK_INPUT_BYTES: u64 = 4 * 1024 * 1024;
 /// Set by `hubctl run`; globally installed hooks then step aside for the run's own injected hooks.
 const RUN_HOOKS_ENV: &str = "HUB_RUN_HOOKS";
 const RUN_META_ENV: &str = "HUB_RUN_META";
+/// Set by the engine on every Claude process it starts itself; those are driven through the SDK, not hooks.
+const MANAGED_SESSION_ENV: &str = "HUB_MANAGED_SESSION";
 const HOOK_EVENTS: [&str; 5] = ["SessionStart", "SessionEnd", "Stop", "Notification", "PermissionRequest"];
 /// `claude -p` cannot use AskUserQuestion, so runs are told how to ask in a way the hub recognises.
 const QUESTION_HINT: &str = "This run is unattended and supervised through Session Hub. If you need a decision or information from the user, finish your reply with exactly one clear question on its own last line, ending with a question mark, and stop.";
@@ -87,6 +89,12 @@ pub(crate) fn api(method: &str, path: &str, body: Option<&Value>, timeout: Durat
 
 // ── hook ─────────────────────────────────────────────────────────────────────
 
+/// Whether a globally installed hook should do nothing for this process: the hub started it itself (it already
+/// drives it through the SDK), or `hubctl run` injected its own hooks for it.
+fn hook_steps_aside(managed_by_hub: bool, run_injected_hooks: bool, from_run: bool) -> bool {
+    managed_by_hub || (run_injected_hooks && !from_run)
+}
+
 /// Forwards one hook event. Every failure path prints nothing and exits 0, so Claude Code falls
 /// back to its own behaviour (a permission request in -p mode is then denied, never allowed).
 fn hook(event: &str, from_run: bool) -> ExitCode {
@@ -94,8 +102,8 @@ fn hook(event: &str, from_run: bool) -> ExitCode {
         eprintln!("hubctl: unknown hook event {event}");
         return ExitCode::SUCCESS;
     }
-    if env::var_os(RUN_HOOKS_ENV).is_some() && !from_run {
-        return ExitCode::SUCCESS; // `hubctl run` injected its own hooks for this process
+    if hook_steps_aside(env::var_os(MANAGED_SESSION_ENV).is_some(), env::var_os(RUN_HOOKS_ENV).is_some(), from_run) {
+        return ExitCode::SUCCESS;
     }
     let mut raw = Vec::new();
     if io::stdin().take(MAX_HOOK_INPUT_BYTES).read_to_end(&mut raw).is_err() {
@@ -404,6 +412,15 @@ fn main() -> ExitCode {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn global_hooks_ignore_processes_the_hub_started_and_defer_to_run_hooks() {
+        assert!(hook_steps_aside(true, false, false), "hub-managed process");
+        assert!(hook_steps_aside(true, true, true), "hub-managed wins even inside hubctl run");
+        assert!(hook_steps_aside(false, true, false), "global copy steps aside for hubctl run's own hooks");
+        assert!(!hook_steps_aside(false, true, true), "hubctl run's own hooks forward");
+        assert!(!hook_steps_aside(false, false, false), "plain claude -p forwards");
+    }
     use super::*;
 
     #[test]

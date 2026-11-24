@@ -1,15 +1,26 @@
 /** New headless session form: device, profile, directory, prompt and the options behind "Gelişmiş". */
 import type { EngineSettings, PermissionMode, WaitPolicy } from "@hub/protocol";
 import { open } from "@tauri-apps/plugin-dialog";
-import { ChevronDown, FolderOpen, Rocket, ShieldAlert } from "lucide-react";
+import { ChevronDown, FolderOpen, Lock, Rocket, ShieldAlert } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { leadingCommand, type CatalogSource } from "../lib/commands";
 import { PERMISSION_MODES } from "../lib/format";
 import { LOCAL, rpc } from "../lib/ipc";
 import { ModelPicker } from "../ui/ModelPicker";
 import { hub, useHub } from "../lib/store";
 import { Button, Card, Input, Row, SectionHeader, Segmented, Select, TextArea } from "../ui/kit";
 import { useToasts } from "../ui/toasts";
+import { CommandPalette, useCommandPalette } from "./CommandPalette";
+
+/** A skill picked from the `/` menu belongs to one device and profile; the session must start there. */
+interface SkillLock {
+  device: string;
+  deviceLabel: string;
+  profileId: string;
+  profileLabel: string;
+  command: string;
+}
 
 
 type WaitMode = WaitPolicy["mode"] | "inherit";
@@ -54,6 +65,10 @@ export function NewSession() {
   const [allowedTools, setAllowedTools] = useState("");
   const [disallowedTools, setDisallowedTools] = useState("");
   const [starting, setStarting] = useState(false);
+  const [lock, setLock] = useState<SkillLock | null>(null);
+  const lockRef = useRef<SkillLock | null>(null);
+  lockRef.current = lock;
+  const promptField = useRef<HTMLTextAreaElement>(null);
 
   // Unsaved input asks before any navigation discards it (Esc, sidebar, settings).
   const dirty = [prompt, name, labels, systemPrompt, allowedTools, disallowedTools].some((value) => value.trim() !== "");
@@ -66,13 +81,61 @@ export function NewSession() {
     rpc(device, "settings.get", {})
       .then((next) => {
         setSettings(next);
-        setProfileId(next.defaultProfileId);
+        // A skill lock decides the profile; otherwise the device's default.
+        const locked = lockRef.current;
+        setProfileId(locked && locked.device === device ? locked.profileId : next.defaultProfileId);
         setPermissionMode(next.defaultPermissionMode);
         setModel(next.defaultModel ?? "");
         setCwd((current) => (current && next.allowedDirectories.some((dir) => current.startsWith(dir)) ? current : (next.allowedDirectories[0] ?? "")));
       })
       .catch((err: unknown) => push("error", err instanceof Error ? err.message : "Ayarlar okunamadı"));
   }, [device, push]);
+
+  // Profiles of every device the owner may start sessions on, loaded the first time the `/` menu is wanted.
+  const wantsCommands = prompt.startsWith("/");
+  const [remoteProfiles, setRemoteProfiles] = useState<Record<string, EngineSettings["profiles"]>>({});
+  const remoteKeys = operableDevices.map((option) => option.value).filter((key) => key !== device).join("|");
+  useEffect(() => {
+    if (!wantsCommands) return;
+    for (const key of remoteKeys.split("|").filter(Boolean)) {
+      if (remoteProfiles[key]) continue;
+      rpc(key, "settings.get", {})
+        .then((next) => setRemoteProfiles((current) => ({ ...current, [key]: next.profiles })))
+        .catch(() => setRemoteProfiles((current) => ({ ...current, [key]: [] })));
+    }
+  }, [wantsCommands, remoteKeys, remoteProfiles]);
+
+  const commandSources = useMemo<CatalogSource[]>(() => {
+    const sources: CatalogSource[] = [];
+    for (const option of operableDevices) {
+      const profiles = option.value === device ? (settings?.profiles ?? []) : (remoteProfiles[option.value] ?? []);
+      for (const profile of profiles) {
+        // Project skills only for the chosen device and folder; other devices have other folders.
+        const projectDir = option.value === device && cwd.trim() !== "" ? cwd.trim() : null;
+        sources.push({ device: option.value, deviceLabel: option.label.replace(/ \(bu cihaz\)$/, ""), profileId: profile.id, profileLabel: profile.name, cwd: projectDir });
+      }
+    }
+    return sources;
+  }, [operableDevices, device, settings, remoteProfiles, cwd]);
+  const showProfiles = new Set(commandSources.map((source) => source.device)).size < commandSources.length;
+
+  const palette = useCommandPalette({
+    text: prompt,
+    setText: setPrompt,
+    field: promptField,
+    sources: commandSources,
+    onPick: (entry) => {
+      if (!entry.owner) return;
+      setLock({ device: entry.owner.device, deviceLabel: entry.owner.deviceLabel, profileId: entry.owner.profileId, profileLabel: entry.owner.profileLabel, command: entry.name });
+      if (entry.owner.device !== device) setDevice(entry.owner.device);
+      else setProfileId(entry.owner.profileId);
+    },
+  });
+
+  // Removing or changing the skill command releases the device and profile again.
+  useEffect(() => {
+    if (lock && leadingCommand(prompt) !== lock.command) setLock(null);
+  }, [prompt, lock]);
 
   const browse = async () => {
     const picked = await open({ directory: true, multiple: false, defaultPath: cwd || undefined });
@@ -132,17 +195,26 @@ export function NewSession() {
         <div className="space-y-4">
           <Card>
             <div className="space-y-4">
-              <TextArea
-                autoFocus
-                rows={6}
-                value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && ready) void start();
-                }}
-                placeholder="Claude ne yapsın? Örn: “Testleri çalıştır, kırılanları düzelt ve bir PR açıklaması yaz.”"
-                className="min-h-[140px] text-[14px]"
-              />
+              <div className="relative">
+                <TextArea
+                  ref={promptField}
+                  autoFocus
+                  rows={6}
+                  value={prompt}
+                  onChange={(event) => {
+                    setPrompt(event.target.value);
+                    palette.trackCaret(event);
+                  }}
+                  onSelect={palette.trackCaret}
+                  onKeyDown={(event) => {
+                    if (palette.handleKey(event)) return;
+                    if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && ready) void start();
+                  }}
+                  placeholder="Claude ne yapsın? Örn: “Testleri çalıştır, kırılanları düzelt.” Komut ve skill'ler için / yaz."
+                  className="min-h-[140px] text-[14px]"
+                />
+                <CommandPalette controller={palette} placement="below" showProfile={showProfiles} footnote="Skill seçince oturum o cihazda başlar" />
+              </div>
               <div className="flex gap-2">
                 <Input value={cwd} onChange={(event) => setCwd(event.target.value)} placeholder="Çalışma dizini" mono className="flex-1" />
                 {device === LOCAL && (
@@ -168,13 +240,28 @@ export function NewSession() {
           </Card>
 
           <Card>
+            <AnimatePresence initial={false}>
+              {lock && (
+                <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: "auto" }} exit={{ opacity: 0, height: 0 }} transition={{ type: "spring", stiffness: 500, damping: 38 }} className="overflow-hidden">
+                  <div className="mb-3 flex items-center gap-3 rounded-xl border border-beacon-400/25 bg-beacon-400/[0.07] px-3 py-2.5 text-[12.5px] text-beacon-200">
+                    <Lock className="size-4 shrink-0" />
+                    <span className="flex-1">
+                      <span className="font-mono text-beacon-300">/{lock.command}</span> skill'i <span className="font-medium text-ink-50">{lock.deviceLabel} · {lock.profileLabel}</span> üzerinde; oturum orada başlar.
+                    </span>
+                    <Button size="sm" variant="ghost" onClick={() => setLock(null)}>
+                      Kilidi aç
+                    </Button>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
             {operableDevices.length > 1 && (
-              <Row label="Cihaz" hint="Oturum seçtiğin cihazda, o cihazın Claude girişiyle çalışır.">
-                <Select label="Cihaz" value={device} options={operableDevices} onChange={setDevice} />
+              <Row label="Cihaz" hint={lock ? "Seçtiğin skill bu cihazda olduğu için sabitlendi." : "Oturum seçtiğin cihazda, o cihazın Claude girişiyle çalışır."}>
+                <Select label="Cihaz" value={device} options={operableDevices} onChange={setDevice} disabled={lock !== null} />
               </Row>
             )}
-            <Row label="Claude profili" hint="Hangi Claude Code girişiyle (CLAUDE_CONFIG_DIR) çalışacağı.">
-              <Select label="Profil" value={profileId} options={(settings?.profiles ?? []).map((profile) => ({ value: profile.id, label: profile.name }))} onChange={setProfileId} />
+            <Row label="Claude profili" hint={lock ? "Skill bu profilde tanımlı olduğu için sabitlendi." : "Hangi Claude Code girişiyle (CLAUDE_CONFIG_DIR) çalışacağı."}>
+              <Select label="Profil" value={profileId} options={(settings?.profiles ?? []).map((profile) => ({ value: profile.id, label: profile.name }))} onChange={setProfileId} disabled={lock !== null} />
             </Row>
             <Row label="Ad" hint="Boş bırakırsan istemin ilk satırı kullanılır.">
               <Input value={name} onChange={(event) => setName(event.target.value)} placeholder="ör. Gece testleri" className="w-[260px]" />
