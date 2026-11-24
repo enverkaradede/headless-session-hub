@@ -1,0 +1,198 @@
+@import "tailwindcss";
+
+/*
+ * Session Hub palette — "night control tower": headless sessions are ships in a dark harbour,
+ * the hub is the beacon watching over them. Harbour (deep petrol) base, beacon (warm signal) accent.
+ */
+@theme {
+  --color-harbor-950: #041016;
+  --color-harbor-900: #07181f;
+  --color-harbor-850: #0a2029;
+  --color-harbor-800: #0e2a35;
+  --color-harbor-700: #153b49;
+  --color-harbor-600: #1e5163;
+  --color-harbor-500: #2c6c80;
+  --color-harbor-400: #4a8ea3;
+  --color-harbor-300: #7fb6c7;
+  --color-beacon-200: #ffe1bd;
+  --color-beacon-300: #ffc58a;
+  --color-beacon-400: #ffa95c;
+  --color-beacon-500: #f08a3a;
+  --color-beacon-600: #c96a22;
+  --color-ink-50: #ecf3f5;
+  --color-ink-200: #bfd0d6;
+  --color-ink-400: #86a1aa;
+  --color-ink-500: #66808a;
+  --color-rose-glow: #ff6b7a;
+  --color-jade: #5fd4a0;
+  --color-violet-glow: #a78bfa;
+
+  --font-sans: "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI", "Inter", system-ui, sans-serif;
+  --font-display: "SF Pro Display", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "SF Mono", "Cascadia Code", ui-monospace, Menlo, Consolas, monospace;
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+:root {
+  color-scheme: dark;
+  -webkit-font-smoothing: antialiased;
+  font-family: var(--font-sans);
+  font-size: 14px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--color-harbor-950);
+  color: var(--color-ink-50);
+}
+
+/* Native feel: no selection outside editing surfaces, arrow cursor, no icon drag, no rubber band. */
+html,
+body {
+  user-select: none;
+  -webkit-user-select: none;
+  cursor: default;
+  overscroll-behavior: none;
+}
+
+img,
+svg,
+a {
+  -webkit-user-drag: none;
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+
+button {
+  cursor: default;
+}
+
+.scroll-quiet {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, var(--color-ink-500) 40%, transparent) transparent;
+}
+
+/* Markdown rendered from Claude: calm, readable, no web-page look. */
+.prose-hub {
+  font-size: 13.5px;
+  line-height: 1.65;
+  color: var(--color-ink-50);
+}
+.prose-hub p {
+  margin: 0.35em 0;
+}
+.prose-hub ul,
+.prose-hub ol {
+  margin: 0.35em 0;
+  padding-left: 1.3em;
+}
+.prose-hub ul {
+  list-style: disc;
+}
+.prose-hub ol {
+  list-style: decimal;
+}
+.prose-hub code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: color-mix(in srgb, var(--color-harbor-700) 55%, transparent);
+  border-radius: 5px;
+  padding: 0.1em 0.35em;
+}
+.prose-hub pre {
+  background: var(--color-harbor-950);
+  border: 1px solid rgb(255 255 255 / 0.06);
+  border-radius: 10px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  margin: 0.5em 0;
+}
+.prose-hub pre code {
+  background: none;
+  padding: 0;
+}
+.prose-hub h1,
+.prose-hub h2,
+.prose-hub h3 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  margin: 0.6em 0 0.3em;
+}
+.prose-hub h1 {
+  font-size: 16px;
+}
+.prose-hub h2 {
+  font-size: 15px;
+}
+.prose-hub h3 {
+  font-size: 14px;
+}
+.prose-hub a {
+  color: var(--color-beacon-300);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose-hub table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 12.5px;
+}
+.prose-hub th,
+.prose-hub td {
+  border: 1px solid rgb(255 255 255 / 0.08);
+  padding: 4px 8px;
+}
+
+/* Beacon sweep shown only while a session waits for a human (idle UI stays still). */
+@keyframes beacon-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+@keyframes shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  20% {
+    transform: translateX(-5px);
+  }
+  40% {
+    transform: translateX(5px);
+  }
+  60% {
+    transform: translateX(-4px);
+  }
+  80% {
+    transform: translateX(4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

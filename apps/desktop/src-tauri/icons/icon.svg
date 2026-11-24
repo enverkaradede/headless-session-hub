@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1E5163"/>
+      <stop offset="1" stop-color="#041016"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.62" cy="0.36" r="0.55">
+      <stop offset="0" stop-color="#FFA95C" stop-opacity="0.38"/>
+      <stop offset="1" stop-color="#FFA95C" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="beam" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FFE1BD" stop-opacity="0.95"/>
+      <stop offset="1" stop-color="#FFC58A" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="tower" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFE1BD"/>
+      <stop offset="1" stop-color="#F08A3A"/>
+    </linearGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)"/>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#glow)"/>
+  <rect x="101" y="101" width="822" height="822" rx="185" fill="none" stroke="#FFC58A" stroke-opacity="0.18" stroke-width="2"/>
+  <path d="M548 330 L860 236 L860 470 Z" fill="url(#beam)" opacity="0.9"/>
+  <path d="M476 330 L180 250 L180 450 Z" fill="#FFC58A" opacity="0.14"/>
+  <rect x="452" y="292" width="120" height="112" rx="34" fill="url(#tower)"/>
+  <path d="M440 424 H584 L620 760 H404 Z" fill="url(#tower)"/>
+  <path d="M424 560 H600" stroke="#041016" stroke-opacity="0.5" stroke-width="26" stroke-linecap="round"/>
+  <path d="M214 812 C 330 770, 400 770, 512 812 S 694 854, 810 812" fill="none" stroke="#7FB6C7" stroke-opacity="0.75" stroke-width="30" stroke-linecap="round"/>
+</svg>

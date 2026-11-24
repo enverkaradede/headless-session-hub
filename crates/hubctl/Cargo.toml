@@ -1,0 +1,11 @@
+[package]
+name = "hubctl"
+version = "0.1.0"
+description = "Session Hub CLI: hook bridge, claude -p wrapper and local API client"
+edition = "2024"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+dirs = "6"
+ureq = { version = "3", default-features = false, features = ["json"] }

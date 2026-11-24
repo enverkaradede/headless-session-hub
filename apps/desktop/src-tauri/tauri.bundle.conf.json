@@ -1,0 +1,10 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "resources": ["resources/node/*", "resources/engine/*"],
+    "externalBin": ["binaries/hubctl"],
+    "windows": {
+      "nsis": { "installMode": "currentUser" }
+    }
+  }
+}

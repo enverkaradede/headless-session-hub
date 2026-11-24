@@ -1,0 +1,17 @@
+{
+  "name": "headless-session-hub",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@11.24.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @hub/engine build && cargo build -p hubctl && pnpm --filter desktop tauri dev",
+    "bundle": "node scripts/prepare-bundle.mjs && pnpm --filter desktop tauri build --config src-tauri/tauri.bundle.conf.json",
+    "test": "pnpm -r --if-present test && cargo test -p hubctl",
+    "typecheck": "pnpm -r --if-present typecheck",
+    "lint:rust": "cargo clippy -p desktop -p hubctl -- -D warnings",
+    "smoke": "pnpm --filter @hub/engine build && node packages/engine/spike/engine-smoke.mjs"
+  }
+}
