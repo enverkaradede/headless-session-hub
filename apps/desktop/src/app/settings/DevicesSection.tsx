@@ -1,10 +1,10 @@
 /** Devices (local only): this device's identity, remote control with per-device access, pairing, relay. */
 import type { EngineSettings, PeerAccess } from "@hub/protocol";
-import { Check, Copy, KeyRound, Laptop, Link2, Radio, Server, Trash2, Waypoints } from "lucide-react";
+import { Activity, Check, Copy, KeyRound, Laptop, Link2, Radio, RefreshCw, Server, Trash2, TriangleAlert, Waypoints } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
 import { ACCESS_HINT, ACCESS_LABEL, timeAgo } from "../../lib/format";
-import { shell, type ClientDevice, type HostDevice } from "../../lib/ipc";
+import { shell, type ClientDevice, type HostDevice, type PeerDiagnostics } from "../../lib/ipc";
 import { useHub } from "../../lib/store";
 import { Button, Card, Chip, Row, Segmented, Select, StatusDot, TextArea, TextField, Toggle } from "../../ui/kit";
 import { useToasts } from "../../ui/toasts";
@@ -79,6 +79,8 @@ export function DevicesSection({ settings, update }: { settings: EngineSettings 
 
       <ConnectCard hosts={peers.hosts} onRemove={(id) => void run(() => shell.removeDevice(id), "Bağlantı kaldırıldı")} />
 
+      <DiagnosticsCard enabled={peers.enabled} />
+
       <Card title="Ağ" icon={Waypoints} description="Doğrudan bağlantı kurulamazsa trafik şifreli bir relay üzerinden geçer. Relay içeriği göremez.">
         <Row label="Relay sunucusu" hint="Boş: n0'ın halka açık relay'leri. Kendi relay'in varsa URL'ini yaz.">
           <TextField label="Relay URL" value={peers.relayUrl ?? ""} placeholder="varsayılan" mono onCommit={(value) => void run(() => shell.setRelay(value.trim() || null), "Relay kaydedildi")} className="w-[280px]" />
@@ -90,7 +92,7 @@ export function DevicesSection({ settings, update }: { settings: EngineSettings 
 
 function PairingCodePanel() {
   const [access, setAccess] = useState<PeerAccess>("operator");
-  const [code, setCode] = useState<{ value: string; expires: number } | null>(null);
+  const [code, setCode] = useState<{ value: string; expires: number; viaRelay: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
   const [now, setNow] = useState(Date.now());
   const { push } = useToasts();
@@ -105,8 +107,8 @@ function PairingCodePanel() {
   const create = async () => {
     setBusy(true);
     try {
-      const value = await shell.createPairingCode(access);
-      setCode({ value, expires: Date.now() + PAIRING_TTL_MS });
+      const result = await shell.createPairingCode(access);
+      setCode({ value: result.code, viaRelay: result.viaRelay, expires: Date.now() + PAIRING_TTL_MS });
     } catch (err) {
       push("error", err instanceof Error ? err.message : "Kod oluşturulamadı");
     } finally {
@@ -125,13 +127,19 @@ function PairingCodePanel() {
       <div className="mt-3 flex flex-wrap items-center gap-3">
         <Segmented value={access} options={ACCESS_OPTIONS} onChange={setAccess} size="sm" />
         <Button variant="primary" size="sm" loading={busy} onClick={() => void create()}>
-          Kod oluştur
+          {busy ? "Relay'e bağlanılıyor…" : "Kod oluştur"}
         </Button>
       </div>
       <p className="mt-2 text-[12px] leading-relaxed text-ink-400">{ACCESS_HINT[access]}</p>
       <AnimatePresence initial={false}>
         {code && (
           <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mt-3 space-y-2">
+            {!code.viaRelay && !expired && (
+              <div className="flex items-start gap-2 rounded-lg border border-beacon-400/30 bg-beacon-400/[0.08] p-2.5 text-[12px] text-beacon-200">
+                <TriangleAlert className="mt-0.5 size-3.5 shrink-0" />
+                Bu cihaz relay sunucusuna ulaşamadı; kod sadece aynı ağdaki cihazlardan çalışır. Aşağıdaki "Bağlantı tanılama"ya bak.
+              </div>
+            )}
             <div className={`rounded-lg border p-3 font-mono text-[11.5px] break-all ${expired ? "border-white/[0.06] text-ink-500 line-through" : "border-beacon-400/30 bg-beacon-400/[0.06] text-ink-50"}`}>{code.value}</div>
             <div className="flex items-center justify-between text-[12px] text-ink-400">
               <span>
@@ -216,3 +224,62 @@ function ConnectCard({ hosts, onRemove }: { hosts: HostDevice[]; onRemove: (id: 
     </Card>
   );
 }
+
+/** Is this device reachable from other networks? Relay link, relay URL, direct addresses. */
+function DiagnosticsCard({ enabled }: { enabled: boolean }) {
+  const [state, setState] = useState<PeerDiagnostics | null>(null);
+  const [busy, setBusy] = useState(false);
+  const refresh = async () => {
+    setBusy(true);
+    try {
+      setState(await shell.diagnostics());
+    } finally {
+      setBusy(false);
+    }
+  };
+  useEffect(() => {
+    void refresh();
+  }, [enabled]);
+
+  return (
+    <Card
+      title="Bağlantı tanılama"
+      icon={Activity}
+      description="Farklı ağlardaki cihazlar birbirine relay üzerinden ulaşır. Relay bağlantısı yoksa sadece aynı ağdan bağlanılabilir."
+      actions={
+        <Button size="sm" icon={RefreshCw} loading={busy} onClick={() => void refresh()}>
+          Yeniden denetle
+        </Button>
+      }
+    >
+      {!state ? null : !state.active ? (
+        <p className="text-[12.5px] text-ink-500">P2P kapalı. Uzaktan kontrolü aç ya da bir cihaza bağlan.</p>
+      ) : (
+        <div className="space-y-0">
+          <Row
+            label="Relay bağlantısı"
+            hint={
+              state.online
+                ? "Bağlı: başka ağlardaki cihazlar bu cihaza ulaşabilir."
+                : "Bağlanamadı: ağ UDP/HTTPS çıkışını, relay sunucusunu ya da TLS'yi engelliyor olabilir (kurumsal proxy, güvenlik duvarı)."
+            }
+          >
+            <span className="flex items-center gap-2 text-[12.5px]">
+              <StatusDot tone={state.online ? "ok" : "error"} />
+              {state.online ? "Bağlı" : "Yok"}
+            </span>
+          </Row>
+          <Row label="Relay" hint={state.customRelay ? "Kendi relay sunucun." : "n0'ın halka açık relay'leri."}>
+            <span className="block max-w-[300px] truncate font-mono text-[11.5px] text-ink-400">{state.relayUrls[0] ?? "—"}</span>
+          </Row>
+          <Row label="Doğrudan adresler" hint="Aynı ağdaki ya da NAT delinebilen cihazlar için.">
+            <span className="block max-w-[300px] text-right font-mono text-[11.5px] text-ink-400">
+              {state.directAddresses.length === 0 ? "—" : state.directAddresses.slice(0, 4).join(", ")}
+            </span>
+          </Row>
+        </div>
+      )}
+    </Card>
+  );
+}
+

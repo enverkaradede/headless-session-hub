@@ -43,7 +43,7 @@ pub async fn engine_status(engine: State<'_, EngineHandle>) -> Result<EngineStat
 
 // ── P2P (local UI only: pairing and access levels are never changed remotely) ──
 
-use crate::peers::{Access, HostView, PeerError, Peers, PeersState};
+use crate::peers::{Access, HostView, PairingCode, PeerDiagnostics, PeerError, Peers, PeersState};
 
 impl From<PeerError> for CommandError {
     fn from(err: PeerError) -> Self {
@@ -72,7 +72,7 @@ pub async fn peers_set_relay(peers: State<'_, Peers>, relay_url: Option<String>)
 }
 
 #[tauri::command]
-pub async fn peers_create_pairing_code(peers: State<'_, Peers>, access: Access) -> Result<String, CommandError> {
+pub async fn peers_create_pairing_code(peers: State<'_, Peers>, access: Access) -> Result<PairingCode, CommandError> {
     Ok(peers.create_pairing_code(access).await?)
 }
 
@@ -84,6 +84,11 @@ pub async fn peers_pair_with(peers: State<'_, Peers>, code: String) -> Result<Ho
 #[tauri::command]
 pub async fn peers_set_access(peers: State<'_, Peers>, device_id: String, access: Access) -> Result<(), CommandError> {
     Ok(peers.set_client_access(device_id, access).await?)
+}
+
+#[tauri::command]
+pub async fn peers_diagnostics(peers: State<'_, Peers>) -> Result<PeerDiagnostics, CommandError> {
+    Ok(peers.diagnostics().await)
 }
 
 #[tauri::command]

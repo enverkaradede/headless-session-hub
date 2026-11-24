@@ -31,7 +31,11 @@ const PAIRING_TOKEN_BYTES: usize = 16;
 const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 const REMOTE_RPC_TIMEOUT: Duration = Duration::from_secs(130);
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+/** First contact may need a relay round trip plus hole punching. */
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+/** How long to wait for the relay before handing out or redeeming a pairing code. */
+const ONLINE_WAIT: Duration = Duration::from_secs(15);
+const ONLINE_PROBE: Duration = Duration::from_millis(400);
 const RECONNECT_BASE: Duration = Duration::from_secs(2);
 const RECONNECT_MAX: Duration = Duration::from_secs(60);
 pub const UI_PEERS: &str = "peers://changed";
@@ -143,8 +147,27 @@ impl From<PeerError> for RpcError {
     }
 }
 
+/// A freshly created code. Without a relay address it only works from the same network.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PairingCode {
+    pub code: String,
+    pub via_relay: bool,
+}
+
+/// What the UI shows under "Bağlantı tanılama".
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PeerDiagnostics {
+    pub active: bool,
+    pub online: bool,
+    pub relay_urls: Vec<String>,
+    pub direct_addresses: Vec<String>,
+    pub custom_relay: bool,
+}
+
 #[derive(Serialize, Deserialize)]
-struct PairingCode {
+struct PairingCodePayload {
     v: u8,
     addr: EndpointAddr,
     token: String,
@@ -404,7 +427,7 @@ impl Peers {
     // ── pairing ──────────────────────────────────────────────────────────────
 
     /// Host side: a one-time code (valid 10 minutes) that grants `access` to whoever redeems it.
-    pub async fn create_pairing_code(&self, access: Access) -> Result<String, PeerError> {
+    pub async fn create_pairing_code(&self, access: Access) -> Result<PairingCode, PeerError> {
         let (enabled, name) = {
             let config = self.inner.config.read().await;
             (config.host_enabled, config.device_name.clone())
@@ -413,33 +436,53 @@ impl Peers {
             return Err(PeerError::HostDisabled);
         }
         let endpoint = self.ensure_endpoint().await?;
-        // Wait briefly for a relay/direct address so the code works across networks.
-        let _ = tokio::time::timeout(Duration::from_secs(5), endpoint.online()).await;
+        // The code must carry the relay address to work from another network; give the relay time to answer.
+        if tokio::time::timeout(ONLINE_WAIT, endpoint.online()).await.is_err() {
+            log::warn!("pairing code created without a relay connection; it will only work on the same network");
+        }
         let mut bytes = [0u8; PAIRING_TOKEN_BYTES];
         rand::rng().fill_bytes(&mut bytes);
         let token = URL_SAFE_NO_PAD.encode(bytes);
         let mut pairing = self.inner.pairing.lock().await;
         pairing.retain(|_, pending| pending.expires > Instant::now());
         pairing.insert(token.clone(), PendingPairing { access, expires: Instant::now() + PAIRING_CODE_TTL });
-        let code = PairingCode { v: 1, addr: endpoint.addr(), token, name };
-        let json = serde_json::to_vec(&code).map_err(storage)?;
-        Ok(format!("SHUB1.{}", URL_SAFE_NO_PAD.encode(json)))
+        let addr = endpoint.addr();
+        let via_relay = addr.relay_urls().next().is_some();
+        log::info!("pairing code created (relay: {via_relay}, direct addresses: {})", addr.ip_addrs().count());
+        let payload = PairingCodePayload { v: 1, addr, token, name };
+        let json = serde_json::to_vec(&payload).map_err(storage)?;
+        Ok(PairingCode { code: format!("SHUB1.{}", URL_SAFE_NO_PAD.encode(json)), via_relay })
     }
 
     /// Client side: redeem a host's pairing code.
     pub async fn pair_with(&self, code: String) -> Result<HostView, PeerError> {
         let payload = code.trim().strip_prefix("SHUB1.").ok_or(PeerError::BadCode)?;
         let decoded = URL_SAFE_NO_PAD.decode(payload).map_err(|_| PeerError::BadCode)?;
-        let code: PairingCode = serde_json::from_slice(&decoded).map_err(|_| PeerError::BadCode)?;
+        let code: PairingCodePayload = serde_json::from_slice(&decoded).map_err(|_| PeerError::BadCode)?;
         let endpoint = self.ensure_endpoint().await?;
+        // Our own relay link speeds up reaching a host on another network; do not wait forever for it.
+        let online = tokio::time::timeout(ONLINE_WAIT, endpoint.online()).await.is_ok();
+        log::info!(
+            "pairing: this device online={online}; host advertises relay={} direct={}",
+            code.addr.relay_urls().next().is_some(),
+            code.addr.ip_addrs().count()
+        );
         if code.addr.id == endpoint.id() {
             return Err(PeerError::Pairing("this code belongs to this device".into()));
         }
         let name = self.inner.config.read().await.device_name.clone();
-        let connection = tokio::time::timeout(CONNECT_TIMEOUT, endpoint.connect(code.addr.clone(), PAIR_ALPN))
-            .await
-            .map_err(|_| PeerError::Network("host did not answer".into()))?
-            .map_err(network)?;
+        let host_has_relay = code.addr.relay_urls().next().is_some();
+        let connection = match tokio::time::timeout(CONNECT_TIMEOUT, endpoint.connect(code.addr.clone(), PAIR_ALPN)).await {
+            Ok(Ok(connection)) => connection,
+            Ok(Err(err)) => {
+                log::warn!("pairing connect failed: {err}");
+                return Err(network(err));
+            }
+            Err(_) => {
+                log::warn!("pairing connect timed out (this device online={online}, host relay={host_has_relay})");
+                return Err(PeerError::Network(unreachable_hint(online, host_has_relay)));
+            }
+        };
         let request = serde_json::to_vec(&PairRequest { token: code.token, name }).map_err(storage)?;
         let response = request_response(&connection, &request).await?;
         connection.close(0u32.into(), b"paired");
@@ -458,6 +501,23 @@ impl Peers {
         .await?;
         tokio::spawn(self.clone().maintain_link(host_id));
         Ok(view)
+    }
+
+    /// Live view of this device's P2P reachability for the diagnostics card.
+    pub async fn diagnostics(&self) -> PeerDiagnostics {
+        let custom_relay = self.inner.config.read().await.relay_url.is_some();
+        let Some(endpoint) = self.inner.endpoint.read().await.clone() else {
+            return PeerDiagnostics { active: false, online: false, relay_urls: vec![], direct_addresses: vec![], custom_relay };
+        };
+        let online = tokio::time::timeout(ONLINE_PROBE, endpoint.online()).await.is_ok();
+        let addr = endpoint.addr();
+        PeerDiagnostics {
+            active: true,
+            online,
+            relay_urls: addr.relay_urls().map(|url| url.to_string()).collect(),
+            direct_addresses: addr.ip_addrs().map(|ip| ip.to_string()).collect(),
+            custom_relay,
+        }
     }
 
     // ── host side ────────────────────────────────────────────────────────────
@@ -624,8 +684,8 @@ impl Peers {
                     self.forward_events(&host_id, &connection).await;
                     connection.closed().await;
                 }
-                Ok(Err(err)) => log::info!("link to {host_id} failed: {err}"),
-                Err(_) => log::info!("link to {host_id} timed out"),
+                Ok(Err(err)) => log::warn!("link to {host_id} failed: {err}"),
+                Err(_) => log::warn!("link to {host_id} timed out"),
             }
             if self.host(&host_id).await.is_none() {
                 return;
@@ -680,6 +740,17 @@ impl Peers {
             error.get("code").and_then(Value::as_str).unwrap_or("REMOTE").to_owned(),
             error.get("message").and_then(Value::as_str).unwrap_or("remote error").to_owned(),
         ))
+    }
+}
+
+/// Turns a pairing timeout into something the owner can act on.
+fn unreachable_hint(this_online: bool, host_has_relay: bool) -> String {
+    if !host_has_relay {
+        "Host cevap vermedi. Kod relay adresi içermiyor: kodu oluşturan cihaz relay'e bağlanamamış, bu kod sadece aynı ağdan çalışır. O cihazda Ayarlar → Cihazlar → Bağlantı tanılama'ya bak.".into()
+    } else if !this_online {
+        "Host cevap vermedi. Bu cihaz relay sunucusuna bağlanamıyor; ağ (güvenlik duvarı/proxy) engelliyor olabilir. Ayarlar → Cihazlar → Bağlantı tanılama'ya bak.".into()
+    } else {
+        "Host cevap vermedi. Kodu oluşturan cihazda uzaktan kontrol açık ve uygulama çalışıyor olmalı; Windows'ta güvenlik duvarı izni gerekebilir.".into()
     }
 }
 

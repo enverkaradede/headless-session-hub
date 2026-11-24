@@ -67,13 +67,28 @@ export interface PeersState {
   hosts: HostDevice[];
 }
 
+export interface PairingCodeResult {
+  code: string;
+  /** False when the code carries no relay address: it then only works from the same network. */
+  viaRelay: boolean;
+}
+
+export interface PeerDiagnostics {
+  active: boolean;
+  online: boolean;
+  relayUrls: string[];
+  directAddresses: string[];
+  customRelay: boolean;
+}
+
 export const shell = {
   engineStatus: () => call<EngineStatus>("engine_status", {}),
   peersState: () => call<PeersState>("peers_state", {}),
   setHostEnabled: (enabled: boolean) => call<void>("peers_set_host_enabled", { enabled }),
   setDeviceName: (name: string) => call<void>("peers_set_device_name", { name }),
   setRelay: (relayUrl: string | null) => call<void>("peers_set_relay", { relayUrl }),
-  createPairingCode: (access: PeerAccess) => call<string>("peers_create_pairing_code", { access }),
+  createPairingCode: (access: PeerAccess) => call<PairingCodeResult>("peers_create_pairing_code", { access }),
+  diagnostics: () => call<PeerDiagnostics>("peers_diagnostics", {}),
   pairWith: (code: string) => call<HostDevice>("peers_pair_with", { code }),
   setAccess: (deviceId: string, access: PeerAccess) => call<void>("peers_set_access", { deviceId, access }),
   removeDevice: (deviceId: string) => call<void>("peers_remove", { deviceId }),

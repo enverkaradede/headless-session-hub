@@ -54,6 +54,18 @@ fn engine_launch(app: &AppHandle) -> Result<EngineLaunch, Box<dyn std::error::Er
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| tray::show_main(app)))
+        // Shell logs (P2P, supervisor) go to <log dir>/shell.log; the engine writes engine.log next to it.
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .level(log::LevelFilter::Info)
+                .level_for("iroh", log::LevelFilter::Warn)
+                .level_for("noq", log::LevelFilter::Warn)
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir { file_name: Some("shell".into()) }),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                ])
+                .build(),
+        )
         .plugin(tauri_plugin_autostart::init(MacosLauncher::LaunchAgent, Some(vec![HIDDEN_FLAG])))
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
@@ -100,6 +112,7 @@ pub fn run() {
             commands::peers_pair_with,
             commands::peers_set_access,
             commands::peers_remove,
+            commands::peers_diagnostics,
         ])
         .run(tauri::generate_context!())
         .unwrap_or_else(|err| {
