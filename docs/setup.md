@@ -15,6 +15,7 @@ every session starts.
 
 ```powershell
 # one-time
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned   # Windows blocks scripts by default; pnpm and the signing helper need this
 winget install OpenJS.NodeJS.LTS      # Node 24 LTS: it is copied into the bundle
 npm install -g pnpm@11
 winget install Rustlang.Rustup        # then: rustup default stable-msvc

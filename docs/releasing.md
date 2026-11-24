@@ -40,14 +40,37 @@ Keep a copy in your password manager.
 
 ### Using the key on the Windows VM
 
-1. On the Mac, copy the key into a VMware shared folder or onto a USB stick. Read the password yourself:
-   `security find-generic-password -s session-hub-updater-key-password -w`
-2. In the VM's PowerShell, for the build session only:
+Two things are needed for signing:
+- the **key file** (`updater.key`), and
+- its **password**.
+
+The file is moved once. The password is typed at each build and never saved on the VM.
+
+**One-time: move the key file to the VM**
+
+1. In VMware, open VM → Settings → Options → Shared Folders. Share a Mac folder, e.g. `~/VMShare`.
+2. On the Mac: `cp ~/.config/session-hub/updater.key ~/VMShare/`
+3. In the VM's PowerShell:
    ```powershell
-   $env:TAURI_SIGNING_PRIVATE_KEY = Get-Content -Raw "$HOME\.session-hub\updater.key"
-   $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = Read-Host -AsSecureString "Key password" | ConvertFrom-SecureString -AsPlainText
+   New-Item -ItemType Directory -Force "$HOME\.session-hub" | Out-Null
+   Copy-Item "\\vmware-host\Shared Folders\VMShare\updater.key" "$HOME\.session-hub\updater.key"
    ```
-   Keep the key file under your user profile (e.g. `%USERPROFILE%\.session-hub\`), not in the repo and not left in the shared folder.
+4. Back on the Mac, remove the copy from the share: `rm ~/VMShare/updater.key`
+
+**Each build: load the key into the PowerShell window**
+
+1. On the Mac, copy the password to the clipboard. It is not shown on screen, and VMware's shared
+   clipboard carries it into the VM:
+   `security find-generic-password -s session-hub-updater-key-password -w | pbcopy`
+2. In the VM, from the repo folder:
+   ```powershell
+   . .\scripts\signing-env.ps1      # the leading dot matters; paste the password when asked
+   ```
+   The key stays loaded only in that window. Closing it forgets both the key and the password.
+
+> This signature is the **update signature**: installed apps accept an update only if it was signed with
+> this key. It is not Windows code signing, which removes the SmartScreen warning. That needs a
+> certificate and is a separate, optional step.
 
 ## Release on Windows
 
@@ -55,6 +78,7 @@ Keep a copy in your password manager.
 git pull --tags
 pnpm install
 pnpm test
+. .\scripts\signing-env.ps1
 pnpm bundle      # builds and signs: target\release\bundle\nsis\Session Hub_<v>_x64-setup.exe + .sig
 pnpm release     # creates/updates GitHub Release v<v>, uploads the installer and latest.json
 ```
