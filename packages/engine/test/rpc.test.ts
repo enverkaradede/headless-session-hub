@@ -101,7 +101,7 @@ describe("RPC authorization by device access level", () => {
 
 describe("peer egress masking", () => {
   const event = (kind: TimelineEvent["kind"], text: string, data: unknown = null): TimelineEvent => ({
-    seq: 1, sessionId: "00000000-0000-4000-8000-000000000000", ts: 0, kind, text, toolName: null, toolUseId: null, data,
+    seq: 1, sessionId: "00000000-0000-4000-8000-000000000000", ts: 0, kind, text, toolName: null, toolUseId: null, parentToolUseId: null, data,
   });
 
   it("masks secrets in timeline text and data", () => {

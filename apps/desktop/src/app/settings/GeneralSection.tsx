@@ -27,7 +27,9 @@ const AUTH_TONE: Record<AuthState["method"], "jade" | "rose" | "beacon" | "neutr
 function slug(name: string): string {
   const base = name
     .toLocaleLowerCase("tr")
+    .replace(/ı/g, "i")
     .normalize("NFKD")
+    .replace(/\p{M}+/gu, "") // drop combining marks: "ş" → "s", not "s-"
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 32);

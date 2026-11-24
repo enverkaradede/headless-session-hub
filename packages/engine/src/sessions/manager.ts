@@ -88,6 +88,13 @@ interface LiveSession {
   limitStopped: boolean;
   /** Exact tool calls the owner approved while the session was closed (deferred permissions). */
   preApproved: Set<string>;
+  /** Last progress summary per subagent, so repeated identical summaries are not stored. */
+  subagentSummaries: Map<string, string>;
+  /**
+   * Background tasks (e.g. backgrounded subagents) still running. A result while this is > 0 is not the
+   * end: closing the input then would kill that work. The CLI starts another turn when they finish.
+   */
+  backgroundTasks: number;
 }
 
 export interface Actor {
@@ -353,6 +360,8 @@ export class SessionManager {
       deferring: false,
       limitStopped: false,
       preApproved: new Set(),
+      subagentSummaries: new Map(),
+      backgroundTasks: 0,
     };
     this.live.set(row.id, live);
     if (mode.prompt !== null) live.input.pushText(mode.prompt);
@@ -392,6 +401,9 @@ export class SessionManager {
         : { type: "preset", preset: "claude_code" },
       canUseTool: this.canUseTool(row.id, live),
       hooks: { PreToolUse: [{ matcher: "AskUserQuestion", hooks: [askHook], timeout: HOOK_WAIT_TIMEOUT_SECONDS, onFailure: "block" }] },
+      // Full subagent transcripts (text and thinking, not just tool calls) for the nested conversation view.
+      forwardSubagentText: true,
+      agentProgressSummaries: true,
       stderr: (data) => log.debug("claude stderr", { sessionId: row.id, data: truncateText(data, 2000) }),
     };
     if (kind === "new") options.sessionId = row.id;
@@ -458,7 +470,7 @@ export class SessionManager {
         return { behavior: "allow", updatedInput: input };
       }
       if (toolName === "AskUserQuestion") return this.askViaCanUseTool(sessionId, input, options.toolUseID, options.signal);
-      const request = this.openRequest(sessionId, toolName, options.toolUseID, input, options.suggestions ?? null, options.blockedPath ?? null);
+      const request = this.openRequest(sessionId, toolName, options.toolUseID, input, options.suggestions ?? null, options.blockedPath ?? null, undefined, options.agentID ?? null);
       const outcome = await this.awaitOutcome(request, options.signal);
       switch (outcome.type) {
         case "answered":
@@ -500,6 +512,7 @@ export class SessionManager {
     suggestions: PermissionUpdate[] | null,
     blockedPath: string | null,
     policyOverride?: WaitPolicy,
+    agentId: string | null = null,
   ): StoredRequest {
     const row = this.requireRow(sessionId);
     const policy: WaitPolicy = policyOverride ?? row.launch.waitPolicy ?? this.deps.settings().defaultWaitPolicy;
@@ -516,6 +529,7 @@ export class SessionManager {
       questions,
       suggestions,
       blockedPath,
+      agentId,
       state: "open",
       createdAt: now,
       expiresAt: policy.mode === "wait" ? null : now + policy.minutes * MINUTE_MS,
@@ -607,11 +621,19 @@ export class SessionManager {
 
   private handleMessage(sessionId: string, live: LiveSession, message: SDKMessage): void {
     const translation = translate(message);
-    for (const draft of translation.drafts) this.appendTimeline(sessionId, draft.kind, draft.text, draft);
+    for (const draft of translation.drafts) {
+      if (draft.kind === "status" && draft.parentToolUseId) {
+        const state = (draft.data as { subagent?: { state?: string } } | null)?.subagent?.state;
+        if (state === "progress" && live.subagentSummaries.get(draft.parentToolUseId) === draft.text) continue;
+        live.subagentSummaries.set(draft.parentToolUseId, draft.text);
+      }
+      this.appendTimeline(sessionId, draft.kind, draft.text, draft);
+    }
     const patch: Partial<SessionRow> = {};
     if (translation.preview) patch.lastMessagePreview = translation.preview;
     if (translation.init) this.onInit(sessionId, live, translation.init, patch);
     if (translation.rateLimit) this.onRateLimit(sessionId, live, translation.rateLimit);
+    if (translation.backgroundTasks !== undefined) this.onBackgroundTasks(live, translation.backgroundTasks);
     if (Object.keys(patch).length > 0) this.patch(sessionId, patch);
     if (translation.result) this.onResult(sessionId, live, translation.result);
   }
@@ -658,6 +680,11 @@ export class SessionManager {
       live.input.close();
       return;
     }
+    if (live.backgroundTasks > 0) {
+      // Background work is still running; the CLI reports back in a later turn.
+      this.patch(sessionId, { status: "running" });
+      return;
+    }
     const failed = result.isError || (result.subtype !== "success" && result.subtype !== "error_max_turns" && result.subtype !== "error_max_budget_usd");
     if (failed) {
       this.patch(sessionId, { status: "error", endReason: "error", errorMessage: truncateText(result.text || result.subtype, 2000) });
@@ -668,6 +695,15 @@ export class SessionManager {
       this.deps.lifecycle.lifecycle("session.completed", this.get(sessionId), result.text || null);
     }
     this.scheduleIdleClose(live);
+  }
+
+  private onBackgroundTasks(live: LiveSession, count: number): void {
+    live.backgroundTasks = count;
+    // Keep a finished-but-busy process alive; the idle timer only runs once nothing is in flight.
+    if (count > 0) {
+      live.idleTimer?.cancel();
+      live.idleTimer = null;
+    }
   }
 
   private scheduleIdleClose(live: LiveSession): void {
@@ -737,7 +773,7 @@ export class SessionManager {
     if (request) this.deps.bus.emit({ type: "request.upsert", request: this.publicRequest(request) });
   }
 
-  appendTimeline(sessionId: string, kind: TimelineEvent["kind"], text: string, extra: { toolName?: string | null; toolUseId?: string | null; data?: unknown } = {}): void {
+  appendTimeline(sessionId: string, kind: TimelineEvent["kind"], text: string, extra: { toolName?: string | null; toolUseId?: string | null; parentToolUseId?: string | null; data?: unknown } = {}): void {
     const event = this.deps.store.appendEvent({
       sessionId,
       ts: this.deps.clock.now(),
@@ -745,6 +781,7 @@ export class SessionManager {
       text,
       toolName: extra.toolName ?? null,
       toolUseId: extra.toolUseId ?? null,
+      parentToolUseId: extra.parentToolUseId ?? null,
       data: extra.data ?? null,
     });
     this.deps.bus.emit({ type: "session.timeline", event });
@@ -761,6 +798,7 @@ export class SessionManager {
       questions: request.questions,
       canAllowForSession: request.kind === "permission",
       blockedPath: request.blockedPath,
+      agentId: request.agentId,
       state: request.state,
       createdAt: request.createdAt,
       expiresAt: request.expiresAt,

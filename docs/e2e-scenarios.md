@@ -23,4 +23,6 @@ where possible. Tick each box and note the date and platform.
 | 14 | Full peer settings | Set the home device to **Tam yetkili**. | Home can edit office settings (Settings → device picker). Webhook secrets show as redacted. |
 | 15 | Turkish user path | Windows user `AyşeŞahin`, a project under `C:\Users\AyşeŞahin\Projeler\çalışma`. | Start, answer and resume work, and paths display correctly. |
 | 16 | Tray life cycle | Close the window while a session runs. Then use tray → Quit. | Session keeps running after the window closes. Quit asks for confirmation while sessions are live. |
+| 18 | Subagent view | Prompt: "Use the Agent tool to read every .txt file here and report." | A violet subagent card shows live activity ("Reading a.txt"). Clicking it morphs into its own conversation pane with a breadcrumb; Esc returns. The session stays `running` until the subagent reports back. |
+| 19 | Auto-update | Public repo only: install vN, publish vN+1 with `pnpm release`. | Settings → Hakkında → "Şimdi denetle" finds vN+1. The sidebar shows the update pill, then download progress, then "Yeniden başlat". The new version is shown after relaunch. |
 | 17 | Engine crash | Kill the `node` engine process. | UI shows "Motor yeniden başlıyor". The engine is back within seconds, and orphaned sessions show `engine_restart`. |

@@ -1,6 +1,6 @@
 /** Pure translation of Agent SDK messages into timeline drafts and session stat updates. */
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
-import type { TimelineKind, UsageLimitInfo } from "@hub/protocol";
+import type { SubagentStatusData, TimelineKind, UsageLimitInfo } from "@hub/protocol";
 
 const MAX_TEXT_CHARS = 8000;
 const MAX_DATA_STRING_CHARS = 8000;
@@ -11,6 +11,8 @@ export interface TimelineDraft {
   text: string;
   toolName: string | null;
   toolUseId: string | null;
+  /** The Agent/Task tool call this event belongs to, for subagent transcripts. */
+  parentToolUseId: string | null;
   data: unknown;
 }
 
@@ -30,6 +32,8 @@ export interface Translation {
   init?: { model: string; permissionMode: string; apiKeySource: string };
   preview?: string;
   result?: ResultInfo;
+  /** Live background work (non-ambient tasks) after a background_tasks_changed level signal. */
+  backgroundTasks?: number;
   rateLimit?: { status: "allowed" | "allowed_warning" | "rejected"; usingOverage: boolean; limit: Omit<UsageLimitInfo, "detectedAt" | "kind"> };
 }
 
@@ -49,7 +53,38 @@ export function clampData(value: unknown, depth = 0): unknown {
 }
 
 function draft(kind: TimelineKind, text: string, extra: Partial<TimelineDraft> = {}): TimelineDraft {
-  return { kind, text, toolName: null, toolUseId: null, data: null, ...extra };
+  return { kind, text, toolName: null, toolUseId: null, parentToolUseId: null, data: null, ...extra };
+}
+
+type TaskMessage = {
+  subtype: string;
+  tool_use_id?: string;
+  description?: string;
+  subagent_type?: string;
+  summary?: string;
+  status?: "completed" | "failed" | "stopped";
+  usage?: { total_tokens?: number; tool_uses?: number };
+};
+
+/** task_started / task_progress / task_notification → a status event on the subagent's own track. */
+function subagentStatus(message: TaskMessage): TimelineDraft | null {
+  if (!message.tool_use_id) return null; // background bash tasks etc. have no spawning tool call
+  const state =
+    message.subtype === "task_started" ? "started" : message.subtype === "task_progress" ? "progress" : (message.status ?? "completed");
+  // On the wire, task_progress carries the live activity ("Reading a.txt") in `description`, not `summary`.
+  const activity = message.summary ?? (state === "progress" ? message.description : undefined) ?? null;
+  if (state === "progress" && !activity) return null;
+  const data: SubagentStatusData = {
+    subagent: {
+      state,
+      description: message.description ?? "",
+      subagentType: message.subagent_type ?? null,
+      summary: activity,
+      toolUses: message.usage?.tool_uses ?? null,
+      totalTokens: message.usage?.total_tokens ?? null,
+    },
+  };
+  return draft("status", activity ?? message.description ?? state, { parentToolUseId: message.tool_use_id, data });
 }
 
 function toolResultText(content: unknown): string {
@@ -78,35 +113,53 @@ export function translate(message: SDKMessage): Translation {
         return { drafts: [draft("notice", `API retry${retry.attempt ? ` #${retry.attempt}` : ""}${retry.error ? `: ${retry.error}` : ""}`)] };
       }
       if (message.subtype === "compact_boundary") return { drafts: [draft("notice", "Conversation compacted")] };
+      if (message.subtype === "background_tasks_changed") {
+        const tasks = (message as unknown as { tasks: { ambient?: boolean }[] }).tasks;
+        return { drafts: [], backgroundTasks: tasks.filter((task) => task.ambient !== true).length };
+      }
+      if (message.subtype === "task_started" || message.subtype === "task_progress" || message.subtype === "task_notification") {
+        const status = subagentStatus(message as unknown as TaskMessage);
+        return { drafts: status ? [status] : [] };
+      }
       return { drafts: [] };
     }
     case "assistant": {
-      if (message.parent_tool_use_id) return { drafts: [] }; // subagent chatter stays out of the main timeline
+      // Subagent messages keep their spawning call id so the UI can show them as a nested conversation.
+      const parentToolUseId = message.parent_tool_use_id ?? null;
       const drafts: TimelineDraft[] = [];
       let preview: string | undefined;
       for (const block of message.message.content) {
         if (block.type === "text" && block.text.trim()) {
-          drafts.push(draft("assistant_text", truncateText(block.text)));
-          preview = oneLine(block.text);
+          drafts.push(draft("assistant_text", truncateText(block.text), { parentToolUseId }));
+          if (!parentToolUseId) preview = oneLine(block.text);
         } else if (block.type === "tool_use") {
-          drafts.push(draft("tool_use", block.name, { toolName: block.name, toolUseId: block.id, data: clampData(block.input) }));
+          drafts.push(draft("tool_use", block.name, { toolName: block.name, toolUseId: block.id, parentToolUseId, data: clampData(block.input) }));
         } else if (block.type === "thinking" && block.thinking.trim()) {
-          drafts.push(draft("thinking", truncateText(block.thinking, 2000)));
+          drafts.push(draft("thinking", truncateText(block.thinking, 2000), { parentToolUseId }));
         }
       }
       return preview === undefined ? { drafts } : { drafts, preview };
     }
     case "user": {
-      if (message.parent_tool_use_id || typeof message.message.content === "string") return { drafts: [] };
+      const parentToolUseId = message.parent_tool_use_id ?? null;
+      const content = message.message.content;
+      if (typeof content === "string") {
+        // The prompt a subagent receives arrives as its first user message.
+        return { drafts: parentToolUseId && content.trim() ? [draft("user_message", truncateText(content), { parentToolUseId })] : [] };
+      }
       const drafts: TimelineDraft[] = [];
-      for (const block of message.message.content) {
-        if (block.type !== "tool_result") continue;
-        drafts.push(
-          draft("tool_result", truncateText(toolResultText(block.content)), {
-            toolUseId: block.tool_use_id,
-            data: { isError: block.is_error === true },
-          }),
-        );
+      for (const block of content) {
+        if (block.type === "tool_result") {
+          drafts.push(
+            draft("tool_result", truncateText(toolResultText(block.content)), {
+              toolUseId: block.tool_use_id,
+              parentToolUseId,
+              data: { isError: block.is_error === true },
+            }),
+          );
+        } else if (block.type === "text" && parentToolUseId && block.text.trim()) {
+          drafts.push(draft("user_message", truncateText(block.text), { parentToolUseId }));
+        }
       }
       return { drafts };
     }

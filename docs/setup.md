@@ -20,11 +20,13 @@ npm install -g pnpm@11
 winget install Rustlang.Rustup        # then: rustup default stable-msvc
 # Visual Studio Build Tools with the "Desktop development with C++" workload, and WebView2 (preinstalled on Windows 11)
 
-# each release
+# each build
 git clone <repo> ; cd headless-session-hub
 pnpm install
 pnpm test
+# set the updater signing key first (see docs/releasing.md), then:
 pnpm bundle
+pnpm release   # optional: publish to GitHub Releases for auto-update
 ```
 
 `pnpm bundle` runs `scripts/prepare-bundle.mjs`, which:

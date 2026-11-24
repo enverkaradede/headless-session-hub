@@ -20,7 +20,7 @@ It brings their questions (`AskUserQuestion`) and permission prompts to you inst
 | `packages/engine` | Node engine: Agent SDK sessions, `canUseTool`, SQLite, local API, hooks, webhooks, masking |
 | `packages/protocol` | Shared zod contract (engine ↔ UI ↔ peers) |
 | `crates/hubctl` | CLI: hook bridge, `claude -p` wrapper, API client |
-| `docs/` | [setup](docs/setup.md), [security model](docs/security-model.md), [API](docs/api.md), [spike findings](docs/findings.md), [manual E2E scenarios](docs/e2e-scenarios.md) |
+| `docs/` | [releasing & auto-update](docs/releasing.md), [setup](docs/setup.md), [security model](docs/security-model.md), [API](docs/api.md), [spike findings](docs/findings.md), [manual E2E scenarios](docs/e2e-scenarios.md) |
 
 ## Quick start (development, macOS or Windows)
 

@@ -167,6 +167,7 @@ export function PermissionCard({ request, canAnswer, onAnswer }: { request: Pend
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-3">
             <h3 className="font-display text-[15px] font-semibold tracking-tight">
+              {request.agentId && <span className="mr-2 rounded-md border border-violet-glow/30 bg-violet-glow/10 px-1.5 align-middle text-[11px] font-medium text-violet-glow">Subagent</span>}
               <span className="font-mono text-beacon-200">{request.toolName}</span> çalıştırmak için izin istiyor
             </h3>
             <PolicyNote request={request} />

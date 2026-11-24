@@ -12,6 +12,8 @@
     "test": "pnpm -r --if-present test && cargo test -p hubctl",
     "typecheck": "pnpm -r --if-present typecheck",
     "lint:rust": "cargo clippy -p desktop -p hubctl -- -D warnings",
-    "smoke": "pnpm --filter @hub/engine build && node packages/engine/spike/engine-smoke.mjs"
+    "smoke": "pnpm --filter @hub/engine build && node packages/engine/spike/engine-smoke.mjs",
+    "version:bump": "node scripts/version.mjs",
+    "release": "node scripts/release.mjs"
   }
 }

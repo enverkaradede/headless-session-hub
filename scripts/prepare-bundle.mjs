@@ -26,6 +26,12 @@ function hostTriple() {
   return line.slice("host: ".length).trim();
 }
 
+// Updater artifacts are signed during `tauri build`; fail before minutes of compiling, not after.
+if (!process.env.TAURI_SIGNING_PRIVATE_KEY) {
+  console.error("TAURI_SIGNING_PRIVATE_KEY is not set. See docs/releasing.md (signing key + password).");
+  process.exit(1);
+}
+
 const nodeMajor = Number(process.versions.node.split(".")[0]);
 if (nodeMajor !== REQUIRED_NODE_MAJOR) {
   console.warn(`! Bundling Node ${process.versions.node}; the supported runtime is Node ${REQUIRED_NODE_MAJOR} LTS.`);

@@ -8,6 +8,8 @@ import { LOCAL } from "../lib/ipc";
 import { hub, useHub, type DeviceState } from "../lib/store";
 import { Button, Segmented, StatusDot, type Tone } from "../ui/kit";
 import { Brand } from "./Brand";
+import { UpdatePill } from "./UpdateDialog";
+import { useUpdater } from "../lib/updater";
 
 type Filter = "all" | "waiting" | "active" | "finished";
 
@@ -110,6 +112,7 @@ export function Sidebar() {
       </div>
 
       <div className="border-t border-white/[0.05] p-3">
+        <UpdatePill />
         <button
           type="button"
           onClick={() => hub.setView({ kind: "settings" })}
@@ -121,8 +124,20 @@ export function Sidebar() {
           Ayarlar
           <EngineIndicator />
         </button>
+        <VersionSignature />
       </div>
     </aside>
+  );
+}
+
+/** Bottom-left footer: app version with the author's signature under it. */
+function VersionSignature() {
+  const { currentVersion } = useUpdater();
+  return (
+    <div className="mt-2 px-3 leading-tight">
+      <div className="font-mono text-[10.5px] text-ink-500 tabular-nums">Session Hub {currentVersion ? `v${currentVersion}` : ""}</div>
+      <div className="mt-0.5 font-display text-[10.5px] tracking-wide text-ink-500/70">Enver Karadede</div>
+    </div>
   );
 }
 

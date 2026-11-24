@@ -84,6 +84,10 @@ const MIGRATIONS: readonly string[] = [
      detail TEXT NOT NULL
    );
    CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);`,
+  // v2: subagent transcripts and subagent-originated requests.
+  `ALTER TABLE events ADD COLUMN parent_tool_use_id TEXT;
+   CREATE INDEX events_parent ON events(session_id, parent_tool_use_id, seq);
+   ALTER TABLE requests ADD COLUMN agent_id TEXT;`,
 ];
 
 /** Launch parameters kept so a closed session can be resumed with the same options. */
@@ -113,6 +117,7 @@ export interface StoredRequest {
   questions: Question[] | null;
   suggestions: PermissionUpdate[] | null;
   blockedPath: string | null;
+  agentId: string | null;
   state: RequestState;
   createdAt: number;
   expiresAt: number | null;
@@ -167,6 +172,7 @@ function toEvent(row: Row): TimelineEvent {
     text: str(row, "text"),
     toolName: strOrNull(row, "tool_name"),
     toolUseId: strOrNull(row, "tool_use_id"),
+    parentToolUseId: strOrNull(row, "parent_tool_use_id"),
     data: json<unknown>(row, "data", null),
   };
 }
@@ -182,6 +188,7 @@ function toRequest(row: Row): StoredRequest {
     questions: json<Question[] | null>(row, "questions", null),
     suggestions: json<PermissionUpdate[] | null>(row, "suggestions", null),
     blockedPath: strOrNull(row, "blocked_path"),
+    agentId: strOrNull(row, "agent_id"),
     state: str(row, "state") as RequestState,
     createdAt: num(row, "created_at"),
     expiresAt: numOrNull(row, "expires_at"),
@@ -291,8 +298,8 @@ export class Store {
   // ── timeline ──
   appendEvent(event: Omit<TimelineEvent, "seq">): TimelineEvent {
     const result = this.db
-      .prepare("INSERT INTO events (session_id, ts, kind, text, tool_name, tool_use_id, data) VALUES (?, ?, ?, ?, ?, ?, ?)")
-      .run(event.sessionId, event.ts, event.kind, event.text, event.toolName, event.toolUseId, event.data == null ? null : JSON.stringify(event.data));
+      .prepare("INSERT INTO events (session_id, ts, kind, text, tool_name, tool_use_id, parent_tool_use_id, data) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
+      .run(event.sessionId, event.ts, event.kind, event.text, event.toolName, event.toolUseId, event.parentToolUseId, event.data == null ? null : JSON.stringify(event.data));
     return { ...event, seq: Number(result.lastInsertRowid) };
   }
 
@@ -308,14 +315,14 @@ export class Store {
   insertRequest(request: StoredRequest): void {
     this.db
       .prepare(
-        `INSERT INTO requests (id, session_id, kind, tool_name, tool_use_id, input, questions, suggestions, blocked_path, state, created_at, expires_at, policy, answer, answered_by, answered_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO requests (id, session_id, kind, tool_name, tool_use_id, input, questions, suggestions, blocked_path, state, created_at, expires_at, policy, answer, answered_by, answered_at, agent_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         request.id, request.sessionId, request.kind, request.toolName, request.toolUseId, JSON.stringify(request.input),
         request.questions ? JSON.stringify(request.questions) : null, request.suggestions ? JSON.stringify(request.suggestions) : null,
         request.blockedPath, request.state, request.createdAt, request.expiresAt, JSON.stringify(request.policy),
-        request.answer ? JSON.stringify(request.answer) : null, request.answeredBy, request.answeredAt,
+        request.answer ? JSON.stringify(request.answer) : null, request.answeredBy, request.answeredAt, request.agentId,
       );
   }
 

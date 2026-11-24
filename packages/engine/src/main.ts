@@ -24,7 +24,9 @@ import { SessionManager, type ClaudeHost } from "./sessions/manager.ts";
 import { SettingsService } from "./settings.ts";
 import { WebhookDispatcher } from "./webhooks.ts";
 
-const ENGINE_VERSION = "0.1.0";
+declare const __HUB_VERSION__: string | undefined;
+/** Injected by build.mjs from apps/desktop/package.json; "dev" when run unbundled. */
+const ENGINE_VERSION = typeof __HUB_VERSION__ === "string" ? __HUB_VERSION__ : "dev";
 const AUTH_CACHE_MS = 60_000;
 const RETENTION_SWEEP_MS = 6 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;

@@ -7,39 +7,71 @@ import { memo, useMemo, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { formatClock, formatCost } from "../lib/format";
+import { SubagentCard } from "./SubagentPane";
+import { isSubagentCall, type SubagentInfo } from "./subagents";
+
+const EMPTY_SET: ReadonlySet<string> = new Set();
 
 type Item =
   | { kind: "event"; event: TimelineEvent }
-  | { kind: "tool"; use: TimelineEvent; result: TimelineEvent | null };
+  | { kind: "tool"; use: TimelineEvent; result: TimelineEvent | null }
+  | { kind: "subagent"; id: string };
 
-/** Pairs every tool_use with its tool_result so a call renders as one collapsible row. */
-function buildItems(events: readonly TimelineEvent[]): Item[] {
+/**
+ * Items of one conversation scope (main = null, or a subagent's call id). Every tool_use is paired
+ * with its tool_result; subagent calls become cards; subagent status lines stay on their own track.
+ */
+function buildItems(events: readonly TimelineEvent[], scope: string | null): Item[] {
+  const scoped = events.filter((event) => event.parentToolUseId === scope);
   const results = new Map<string, TimelineEvent>();
-  for (const event of events) {
+  for (const event of scoped) {
     if (event.kind === "tool_result" && event.toolUseId) results.set(event.toolUseId, event);
   }
   const items: Item[] = [];
-  for (const event of events) {
+  for (const event of scoped) {
     if (event.kind === "tool_result" && event.toolUseId) continue;
-    if (event.kind === "tool_use") items.push({ kind: "tool", use: event, result: event.toolUseId ? (results.get(event.toolUseId) ?? null) : null });
+    if (event.kind === "status" && event.parentToolUseId !== null) continue; // summarised on the card
+    if (isSubagentCall(event) && event.toolUseId) items.push({ kind: "subagent", id: event.toolUseId });
+    else if (event.kind === "tool_use") items.push({ kind: "tool", use: event, result: event.toolUseId ? (results.get(event.toolUseId) ?? null) : null });
     else items.push({ kind: "event", event });
   }
   return items;
 }
 
-export const Timeline = memo(function Timeline({ events }: { events: readonly TimelineEvent[] }) {
-  const items = useMemo(() => buildItems(events), [events]);
+export const Timeline = memo(function Timeline({
+  events,
+  scope = null,
+  subagents,
+  openIds = EMPTY_SET,
+  onOpenSubagent,
+}: {
+  events: readonly TimelineEvent[];
+  scope?: string | null;
+  subagents: Map<string, SubagentInfo>;
+  openIds?: ReadonlySet<string>;
+  onOpenSubagent: (id: string) => void;
+}) {
+  const items = useMemo(() => buildItems(events, scope), [events, scope]);
   return (
     <div className="space-y-3">
       <AnimatePresence initial={false}>
         {items.map((item) => (
           <motion.div
-            key={item.kind === "tool" ? `t${item.use.seq}` : `e${item.event.seq}`}
+            key={item.kind === "tool" ? `t${item.use.seq}` : item.kind === "subagent" ? `a${item.id}` : `e${item.event.seq}`}
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ type: "spring", stiffness: 500, damping: 40 }}
           >
-            {item.kind === "tool" ? <ToolRow use={item.use} result={item.result} /> : <EventRow event={item.event} />}
+            {item.kind === "tool" ? (
+              <ToolRow use={item.use} result={item.result} />
+            ) : item.kind === "subagent" ? (
+              (() => {
+                const info = subagents.get(item.id);
+                return info ? <SubagentCard info={info} open={openIds.has(item.id)} onOpen={() => onOpenSubagent(item.id)} /> : null;
+              })()
+            ) : (
+              <EventRow event={item.event} />
+            )}
           </motion.div>
         ))}
       </AnimatePresence>

@@ -19,6 +19,9 @@ Script: `packages/engine/spike/sdk-spike.mjs`. Raw reports land in `packages/eng
 | 12 | Can stdin answer a pending request? | ⏭ Not needed: answers go through `canUseTool` / PreToolUse. | design |
 | 13 | PermissionRequest hook long wait (compat mode) | ⏳ Default timeout 600 s, max undocumented. Test with `hubctl` in the compat phase. | docs |
 
+| 14 | Subagent transcripts | ✅ With `forwardSubagentText: true`, subagent assistant/user messages arrive with `parent_tool_use_id` = the spawning `Agent` call (9 assistant + 5 user frames in the test run). `task_started` → `task_progress`* → `task_notification` bracket each subagent. **`task_progress` carries the live activity in `description` ("Reading a.txt"); `summary` was absent.** | `spike/subagent-spike.mjs` |
+| 15 | Backgrounded subagents vs. streaming input | ❌→✅ A subagent can run in the background. The main turn then **emits a result before the subagent finishes** ("still reading…"). Closing the input on that result killed the subagent (0 transcript events). Fix: track `background_tasks_changed` (level signal, replace semantics, ignore `ambient`) and keep the process open while > 0. The CLI starts another turn when the work finishes. Verified: 15 subagent events, correct final answer. | `spike/engine-subagent-smoke.mjs`, `test/subagents.test.ts` |
+
 ## Environment notes
 
 - This Mac runs two Claude accounts through `CLAUDE_CONFIG_DIR` (`~/.claude-work`, `~/.claude-personal`); `claude` itself is an alias. The app therefore supports **profiles** (name + config dir), and auth checks and hook installs happen per profile.

@@ -1,6 +1,7 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
+import { ErrorBoundary } from "./ui/ErrorBoundary";
 import "./styles.css";
 
 /** True for elements where the native cut/copy/paste menu belongs. */
@@ -20,6 +21,8 @@ if (!container) throw new Error("root element missing from index.html");
 
 createRoot(container).render(
   <StrictMode>
-    <App />
+    <ErrorBoundary>
+      <App />
+    </ErrorBoundary>
   </StrictMode>,
 );

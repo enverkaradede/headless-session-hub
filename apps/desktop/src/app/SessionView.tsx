@@ -9,6 +9,8 @@ import { hub, timelineKey, useHub } from "../lib/store";
 import { Button, Chip, StatusDot, TextArea } from "../ui/kit";
 import { useToasts } from "../ui/toasts";
 import { PermissionCard, QuestionCard } from "./RequestCards";
+import { SubagentPane } from "./SubagentPane";
+import { buildSubagentIndex } from "./subagents";
 import { Timeline } from "./Timeline";
 
 const NEAR_BOTTOM_PX = 140;
@@ -33,6 +35,10 @@ export function SessionView({ device, sessionId }: { device: string; sessionId: 
   const stickToBottom = useRef(true);
 
   const pending = useMemo(() => allRequests.filter((request) => request.state === "open" || request.state === "deferred"), [allRequests]);
+  const subagents = useMemo(() => buildSubagentIndex(events ?? []), [events]);
+  const [subagentStack, setSubagentStack] = useState<string[]>([]);
+  const openIds = useMemo(() => new Set(subagentStack), [subagentStack]);
+  useEffect(() => setSubagentStack([]), [sessionId]);
 
   // Follow new output unless the owner scrolled up to read.
   useLayoutEffect(() => {
@@ -65,13 +71,15 @@ export function SessionView({ device, sessionId }: { device: string; sessionId: 
   return (
     <div className="flex h-full flex-col">
       <SessionHeader session={session} device={device} deviceName={deviceName} canOperate={canOperate} />
+      <div className="relative min-h-0 flex-1">
+      <SubagentPane stack={subagentStack} index={subagents} events={events ?? []} onNavigate={setSubagentStack} />
       <div
         ref={scroller}
         onScroll={(event) => {
           const element = event.currentTarget;
           stickToBottom.current = element.scrollHeight - element.scrollTop - element.clientHeight < NEAR_BOTTOM_PX;
         }}
-        className="scroll-quiet flex-1 overflow-y-auto"
+        className="scroll-quiet h-full overflow-y-auto"
       >
         <div className="mx-auto max-w-[860px] px-8 pt-4 pb-6">
           {events === undefined ? (
@@ -79,7 +87,7 @@ export function SessionView({ device, sessionId }: { device: string; sessionId: 
               <LoaderCircle className="size-5 animate-spin" />
             </div>
           ) : (
-            <Timeline events={events} />
+            <Timeline events={events} subagents={subagents} openIds={openIds} onOpenSubagent={(id) => setSubagentStack([id])} />
           )}
           <SessionBanners session={session} device={device} canOperate={canOperate} />
           <div className="mt-4 space-y-4">
@@ -95,6 +103,7 @@ export function SessionView({ device, sessionId }: { device: string; sessionId: 
           </div>
           {session.status === "running" || session.status === "starting" ? <WorkingIndicator /> : null}
         </div>
+      </div>
       </div>
       <Composer session={session} device={device} canOperate={canOperate} />
     </div>

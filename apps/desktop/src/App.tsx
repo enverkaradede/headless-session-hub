@@ -7,6 +7,7 @@ import { SessionView } from "./app/SessionView";
 import { SettingsView } from "./app/settings/SettingsView";
 import { Sidebar } from "./app/Sidebar";
 import { hub, useHub } from "./lib/store";
+import { updater } from "./lib/updater";
 import { Button, EmptyState } from "./ui/kit";
 import { ToastProvider, useToasts } from "./ui/toasts";
 
@@ -24,6 +25,7 @@ function Shell() {
 
   useEffect(() => {
     hub.start().catch((err: unknown) => push("error", err instanceof Error ? err.message : "Başlatılamadı"));
+    updater.start();
   }, [push]);
 
   const viewKey = view.kind === "session" ? `${view.device}:${view.sessionId}` : view.kind;

@@ -113,10 +113,27 @@ export const TimelineEvent = z.object({
   text: z.string(),
   toolName: z.string().nullable(),
   toolUseId: z.string().nullable(),
+  /** Set for events inside a subagent: the id of the Agent/Task tool call that spawned it. */
+  parentToolUseId: z.string().nullable(),
   /** Structured details (tool input, result stats). Masked on egress. */
   data: z.unknown().nullable(),
 });
 export type TimelineEvent = z.infer<typeof TimelineEvent>;
+
+/** `data` of a "status" event that tracks a subagent (parentToolUseId = its Agent tool call). */
+export interface SubagentStatusData {
+  subagent: {
+    state: "started" | "progress" | "completed" | "failed" | "stopped";
+    description: string;
+    subagentType: string | null;
+    summary: string | null;
+    toolUses: number | null;
+    totalTokens: number | null;
+  };
+}
+
+/** Tool names that spawn a subagent. */
+export const SUBAGENT_TOOLS: readonly string[] = ["Agent", "Task"];
 
 // ── Pending requests (questions + permissions) ───────────────────────────────
 
@@ -147,6 +164,8 @@ export const PendingRequest = z.object({
   /** Whether "always allow in this session" can be offered. */
   canAllowForSession: z.boolean(),
   blockedPath: z.string().nullable(),
+  /** Set when a subagent (not the main conversation) asked. */
+  agentId: z.string().nullable(),
   state: RequestState,
   createdAt: z.number().int(),
   expiresAt: z.number().int().nullable(),

@@ -1,10 +1,11 @@
 /** Settings: tabs for general, behaviour, integrations, devices (local only) and audit. */
-import { Activity, Cable, ClipboardList, LoaderCircle, MonitorSmartphone, SlidersHorizontal } from "lucide-react";
+import { Activity, Cable, ClipboardList, Info, LoaderCircle, MonitorSmartphone, SlidersHorizontal } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useMemo, useState, type ComponentType } from "react";
 import { LOCAL } from "../../lib/ipc";
 import { useHub } from "../../lib/store";
 import { Select } from "../../ui/kit";
+import { AboutSection } from "./AboutSection";
 import { AuditSection } from "./AuditSection";
 import { BehaviourSection } from "./BehaviourSection";
 import { DevicesSection } from "./DevicesSection";
@@ -12,7 +13,7 @@ import { GeneralSection } from "./GeneralSection";
 import { IntegrationsSection } from "./IntegrationsSection";
 import { useEngineSettings } from "./useEngineSettings";
 
-type Tab = "general" | "behaviour" | "integrations" | "devices" | "audit";
+type Tab = "general" | "behaviour" | "integrations" | "devices" | "audit" | "about";
 
 const TABS: ReadonlyArray<{ id: Tab; label: string; icon: ComponentType<{ className?: string }>; localOnly?: boolean }> = [
   { id: "general", label: "Genel", icon: SlidersHorizontal },
@@ -20,6 +21,7 @@ const TABS: ReadonlyArray<{ id: Tab; label: string; icon: ComponentType<{ classN
   { id: "integrations", label: "Entegrasyonlar", icon: Cable },
   { id: "devices", label: "Cihazlar", icon: MonitorSmartphone, localOnly: true },
   { id: "audit", label: "Denetim", icon: ClipboardList },
+  { id: "about", label: "Hakkında", icon: Info, localOnly: true },
 ];
 
 export function SettingsView() {
@@ -75,7 +77,7 @@ export function SettingsView() {
 
         {error ? (
           <p className="rounded-xl border border-rose-glow/30 bg-rose-glow/[0.07] p-4 text-[13px] text-rose-glow">{error}</p>
-        ) : activeTab !== "devices" && activeTab !== "audit" && settings === null ? (
+        ) : activeTab !== "devices" && activeTab !== "audit" && activeTab !== "about" && settings === null ? (
           <div className="grid h-48 place-items-center text-ink-400">
             <LoaderCircle className="size-5 animate-spin" />
           </div>
@@ -87,6 +89,7 @@ export function SettingsView() {
               {activeTab === "integrations" && settings && <IntegrationsSection device={device} settings={settings} update={update} />}
               {activeTab === "devices" && <DevicesSection settings={settings} update={update} />}
               {activeTab === "audit" && <AuditSection device={device} />}
+              {activeTab === "about" && <AboutSection />}
             </motion.div>
           </AnimatePresence>
         )}
