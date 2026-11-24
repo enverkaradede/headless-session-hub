@@ -143,7 +143,7 @@ class HubStore {
         ...device,
         info,
         loadError: null,
-        sessions: Object.fromEntries(sessions.map((session) => [session.id, session])),
+        sessions: Object.fromEntries(sessions.map((session) => [session.id, normalizeSession(session)])),
         requests: { ...device.requests, ...requests },
       }));
     } catch (err) {
@@ -173,7 +173,7 @@ class HubStore {
   private apply(device: string, event: EngineEvent): void {
     switch (event.type) {
       case "session.upsert":
-        this.patchDevice(device, (state) => ({ ...state, sessions: { ...state.sessions, [event.session.id]: event.session } }));
+        this.patchDevice(device, (state) => ({ ...state, sessions: { ...state.sessions, [event.session.id]: normalizeSession(event.session) } }));
         return;
       case "session.timeline": {
         const key = timelineKey(device, event.event.sessionId);
@@ -199,6 +199,11 @@ class HubStore {
         return; // native notifications are shown by the shell
     }
   }
+}
+
+/** Paired devices may run an older engine that does not send newer fields yet. */
+function normalizeSession(session: SessionSummary): SessionSummary {
+  return { ...session, queuedMessages: session.queuedMessages ?? [] };
 }
 
 function emptyDevice(key: string, name: string, online: boolean): DeviceState {

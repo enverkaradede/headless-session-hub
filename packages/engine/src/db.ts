@@ -90,6 +90,8 @@ const MIGRATIONS: readonly string[] = [
    ALTER TABLE requests ADD COLUMN agent_id TEXT;`,
   // v3: plain-text questions at the end of a turn.
   `ALTER TABLE sessions ADD COLUMN awaiting_reply INTEGER NOT NULL DEFAULT 0;`,
+  // v4: messages queued while the session could not take input.
+  `ALTER TABLE sessions ADD COLUMN queued_messages TEXT;`,
 ];
 
 /** Launch parameters kept so a closed session can be resumed with the same options. */
@@ -162,6 +164,7 @@ function toSession(row: Row): SessionRow {
     outputTokens: num(row, "output_tokens"),
     lastMessagePreview: strOrNull(row, "last_message_preview"),
     awaitingReply: num(row, "awaiting_reply") === 1,
+    queuedMessages: json<string[]>(row, "queued_messages", []),
     launch: json<LaunchConfig>(row, "launch", { permissionMode: "default" }),
   };
 }
@@ -222,9 +225,10 @@ const SESSION_COLUMNS: Record<keyof SessionRow, string> = {
   outputTokens: "output_tokens",
   lastMessagePreview: "last_message_preview",
   awaitingReply: "awaiting_reply",
+  queuedMessages: "queued_messages",
   launch: "launch",
 };
-const JSON_SESSION_FIELDS = new Set<keyof SessionRow>(["labels", "usageLimit", "launch"]);
+const JSON_SESSION_FIELDS = new Set<keyof SessionRow>(["labels", "usageLimit", "queuedMessages", "launch"]);
 
 function encodeSessionValue(key: keyof SessionRow, value: unknown): SQLInputValue {
   if (JSON_SESSION_FIELDS.has(key)) return value == null ? null : JSON.stringify(value);

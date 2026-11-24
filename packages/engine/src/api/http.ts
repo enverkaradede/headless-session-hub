@@ -18,7 +18,7 @@ const DEFAULT_RESUME_TEXT = "Continue where you left off.";
 const UUID_SEGMENT = "([0-9a-fA-F-]{36})";
 
 interface Route {
-  method: "GET" | "POST" | "PATCH";
+  method: "GET" | "POST" | "PATCH" | "DELETE";
   pattern: RegExp;
   handle: (match: RegExpExecArray, body: unknown, url: URL, signal: AbortSignal) => Promise<unknown>;
 }
@@ -110,6 +110,7 @@ export class LocalApi {
         handle: (m, body) => call("sessions.message", { sessionId: m[1], text: ResumeBody.parse(body).text ?? DEFAULT_RESUME_TEXT }),
       },
       { method: "POST", pattern: new RegExp(`^/v1/sessions/${UUID_SEGMENT}/stop$`), handle: (m) => call("sessions.stop", { sessionId: m[1] }) },
+      { method: "DELETE", pattern: new RegExp(`^/v1/sessions/${UUID_SEGMENT}/queue$`), handle: (m) => call("sessions.clearQueue", { sessionId: m[1] }) },
       { method: "POST", pattern: /^\/v1\/hooks$/, handle: (_m, body, _u, signal) => this.compat.handle(HookEnvelope.parse(body), signal) },
     ];
   }
@@ -159,7 +160,7 @@ export class LocalApi {
     });
     try {
       const match = route.pattern.exec(url.pathname) as RegExpExecArray;
-      const body = req.method === "GET" ? {} : await readBody(req);
+      const body = req.method === "GET" || req.method === "DELETE" ? {} : await readBody(req);
       send(res, 200, await route.handle(match, body, url, aborter.signal));
     } catch (err) {
       this.sendError(res, err, url.pathname);

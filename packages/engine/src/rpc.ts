@@ -18,7 +18,7 @@ const READ_METHODS: readonly RpcMethod[] = [
   "hooks.status",
   "audit.list",
 ];
-const SESSION_CONTROL_METHODS: readonly RpcMethod[] = ["sessions.start", "sessions.message", "sessions.answer", "sessions.stop", "sessions.update", "sessions.configure"];
+const SESSION_CONTROL_METHODS: readonly RpcMethod[] = ["sessions.start", "sessions.message", "sessions.answer", "sessions.stop", "sessions.update", "sessions.configure", "sessions.clearQueue"];
 const ADMIN_METHODS: readonly RpcMethod[] = ["settings.update", "hooks.install", "hooks.uninstall", "auth.refresh"];
 
 /** What each paired-device access level may call. The local desktop UI may call everything. */
@@ -87,6 +87,7 @@ export class RpcDispatcher {
     "sessions.answer": (p, caller) => this.ctx.manager.answer(p.sessionId, p.requestId, p.answer, actorFor(caller)),
     "sessions.stop": (p, caller) => this.ctx.manager.stop(p.sessionId, actorFor(caller)),
     "sessions.update": (p, caller) => this.ctx.manager.update(p.sessionId, { name: p.name, labels: p.labels }, actorFor(caller)),
+    "sessions.clearQueue": (p, caller) => this.ctx.manager.clearQueue(p.sessionId, actorFor(caller)),
     "sessions.configure": (p, caller) => this.ctx.manager.configure(p.sessionId, { model: p.model, permissionMode: p.permissionMode }, actorFor(caller)),
     "settings.get": (_p, caller) => (caller.kind === "local" ? this.ctx.settings.get() : this.ctx.settings.redacted()),
     "settings.update": (p, caller) => {

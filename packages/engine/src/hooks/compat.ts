@@ -127,6 +127,7 @@ export class CompatLayer {
       outputTokens: 0,
       lastMessagePreview: null,
       awaitingReply: false,
+      queuedMessages: [],
       launch: { permissionMode: base.permission_mode ?? "default" },
     };
     this.manager.compatRegister(row);

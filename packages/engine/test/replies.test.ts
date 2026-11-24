@@ -141,13 +141,6 @@ describe("claude -p sessions via hooks", () => {
     expect(h.fake.calls).toHaveLength(0);
   });
 
-  it("still refuses to message a claude -p session whose process is running", async () => {
-    const h = makeHarness([]);
-    const compat = new CompatLayer(h.manager, h.clock, () => h.manager.store.loadSettings());
-    await compat.handle(envelope("SessionStart"), new AbortController().signal);
-    await expect(h.manager.message(sessionId, "hi", ACTOR)).rejects.toMatchObject({ code: "CONFLICT" });
-  });
-
   it("does not treat a plain statement as a question", async () => {
     const h = makeHarness([]);
     const compat = new CompatLayer(h.manager, h.clock, () => h.manager.store.loadSettings());

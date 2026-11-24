@@ -288,11 +288,21 @@ pub fn reply(args: &[String]) -> ExitCode {
     };
     let session_id = text(&session, "id");
     match post(&format!("/v1/sessions/{session_id}/message"), &json!({ "text": words.join(" ") })) {
-        Ok(_) => {
-            println!("Sent. Session {} continues.", short(session_id));
+        Ok(updated) => {
+            println!("{}", reply_outcome(&updated, short(session_id)));
             ExitCode::SUCCESS
         }
         Err(err) => fail(err),
+    }
+}
+
+/** A message to a session whose claude -p process is still running is queued, not sent; say which. */
+fn reply_outcome(updated: &Value, short_id: &str) -> String {
+    let queued = updated.get("queuedMessages").and_then(Value::as_array).map_or(0, Vec::len);
+    if queued > 0 {
+        format!("Queued ({queued} waiting). Session {short_id} continues with it when its current process ends.")
+    } else {
+        format!("Sent. Session {short_id} continues.")
     }
 }
 
@@ -302,6 +312,13 @@ mod tests {
 
     fn question(multi: bool) -> Value {
         json!({ "question": "Which?", "header": "H", "multiSelect": multi, "options": [{ "label": "Red" }, { "label": "Blue" }, { "label": "Green" }] })
+    }
+
+    #[test]
+    fn reply_says_whether_the_message_was_queued() {
+        assert_eq!(reply_outcome(&json!({ "queuedMessages": [] }), "abcd1234"), "Sent. Session abcd1234 continues.");
+        assert!(reply_outcome(&json!({ "queuedMessages": ["a", "b"] }), "abcd1234").starts_with("Queued (2 waiting)."));
+        assert_eq!(reply_outcome(&json!({}), "abcd1234"), "Sent. Session abcd1234 continues.");
     }
 
     #[test]

@@ -86,6 +86,11 @@ export const SessionSummary = z.object({
   live: z.boolean(),
   /** The turn ended on a plain-text question (no AskUserQuestion card); a message answers it. */
   awaitingReply: z.boolean(),
+  /**
+   * Messages written while the session could not take them (an external claude -p process is still running,
+   * or the hub process is closing). They are sent, in order, as soon as the session can continue.
+   */
+  queuedMessages: z.array(z.string()).default([]),
 });
 export type SessionSummary = z.infer<typeof SessionSummary>;
 
@@ -361,6 +366,7 @@ export const RpcSchemas = {
   "sessions.stop": SessionIdParams,
   "sessions.update": UpdateSessionParams,
   "sessions.configure": ConfigureSessionParams,
+  "sessions.clearQueue": SessionIdParams,
   "settings.get": z.object({}),
   "settings.update": EngineSettings.partial(),
   "hooks.status": z.object({}),
@@ -422,6 +428,7 @@ export interface RpcResults {
   "sessions.stop": SessionSummary;
   "sessions.update": SessionSummary;
   "sessions.configure": SessionSummary;
+  "sessions.clearQueue": SessionSummary;
   "settings.get": EngineSettings;
   "settings.update": EngineSettings;
   "hooks.status": HooksStatus;

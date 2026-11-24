@@ -29,9 +29,10 @@ Errors use the body `{ "error": { "code", "message" } }`:
 | `GET /v1/sessions/:id/timeline` | `?after=<seq>` | `TimelineEvent[]` |
 | `GET /v1/sessions/:id/requests` | – | `PendingRequest[]` |
 | `POST /v1/sessions/:id/answer` | `{ requestId, answer }` | `PendingRequest` |
-| `POST /v1/sessions/:id/message` | `{ text }` | `SessionSummary`; resumes with `--resume` if the process is closed |
+| `POST /v1/sessions/:id/message` | `{ text }` | `SessionSummary`; never refused for being busy (see [Messages](#messages)) |
 | `POST /v1/sessions/:id/resume` | `{ text? }` | as `message`, default text "Continue where you left off." |
-| `POST /v1/sessions/:id/stop` | – | `SessionSummary` |
+| `POST /v1/sessions/:id/stop` | – | `SessionSummary`; also drops queued messages |
+| `DELETE /v1/sessions/:id/queue` | – | `SessionSummary`; drops queued messages without sending them |
 | `POST /v1/hooks` | used by `hubctl hook` | hook decision |
 
 ### StartSessionParams
@@ -60,6 +61,22 @@ Errors use the body `{ "error": { "code", "message" } }`:
 // permission
 { "kind": "permission", "decision": "allow" | "allow_session" | "deny", "message": "optional, for deny" }
 ```
+
+### Messages
+
+Input is never locked, as in Claude Code itself. What a message does depends on the session:
+
+| Session state | Effect |
+|---|---|
+| Live hub process, a question or permission card is open | The message answers the card: the tool call is declined and Claude gets the text as the user's reply in the same turn |
+| Live hub process, no card | Written straight into the running process |
+| External `claude -p` process running, permission pending | Answers the permission the same way |
+| External `claude -p` process running, nothing pending | Queued (`queuedMessages`); when the process ends, the session resumes in the hub with all queued messages in order |
+| Hub process closing | Queued; sent as soon as it has closed |
+| Closed | Resumes with `--resume` (plus anything queued before) |
+
+If queued messages cannot be sent (directory no longer allowed, auth guard, the run ended in an error or usage limit),
+they stay in the queue and a notice says why; the next message sends them together with it.
 
 ### Statuses
 

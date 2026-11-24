@@ -45,6 +45,9 @@ const INTERRUPT_TIMEOUT_MS = 5_000;
 const STOP_GRACE_MS = 10_000;
 const DEFAULT_NAME_CHARS = 60;
 const LIVE_STATUSES: readonly SessionStatus[] = ["starting", "running", "waiting_input", "waiting_permission", "idle"];
+/** Bounds the queue of a session that cannot take input yet; each message is already length-limited. */
+const MAX_QUEUED_MESSAGES = 50;
+const QUEUE_ACTOR: Actor = { id: "queue" };
 
 export type QueryFn = typeof sdkQuery;
 
@@ -71,7 +74,9 @@ type Outcome =
   | { type: "answered"; answer: RequestAnswer }
   | { type: "expired" }
   | { type: "defer" }
-  | { type: "cancelled" };
+  | { type: "cancelled" }
+  /** The owner wrote a message instead of using the card; `reply` carries it to this request, if any. */
+  | { type: "superseded"; reply: string | null };
 
 interface Waiter {
   resolve: (outcome: Outcome) => void;
@@ -107,6 +112,18 @@ export interface Actor {
 
 function approvalKey(toolName: string, input: Record<string, unknown>): string {
   return `${toolName}\u0000${JSON.stringify(input)}`;
+}
+
+/** What Claude reads when the owner answered a card by writing a message instead. */
+function supersededReason(kind: "question" | "permission", reply: string | null): string {
+  if (reply === null) {
+    return kind === "question"
+      ? "The user did not answer this question; they sent a message instead, which follows."
+      : "The user did not approve this call; they sent a message instead, which follows.";
+  }
+  return kind === "question"
+    ? `The user did not pick an option and replied in their own words instead. Treat this as their answer:\n\n${reply}`
+    : `The user did not approve this call and replied instead. Follow their reply:\n\n${reply}`;
 }
 
 function defaultName(prompt: string): string {
@@ -192,6 +209,7 @@ export class SessionManager {
       outputTokens: 0,
       lastMessagePreview: null,
       awaitingReply: false,
+      queuedMessages: [],
       launch,
     };
     await this.preflight(profile, actor, row.id);
@@ -204,7 +222,14 @@ export class SessionManager {
     return summary;
   }
 
-  /** Sends a message: straight into a live process, otherwise by resuming the session. */
+  /**
+   * Sends a message. Input is never refused for being "busy", as in Claude Code itself:
+   * - live process: written straight in; an open question/permission card is answered by the message;
+   * - external claude -p process still running: an open permission is answered by it, otherwise it is queued
+   *   and sent when that process ends;
+   * - hub process closing: queued and sent once it has closed;
+   * - otherwise: resumes the session with it (plus anything queued before).
+   */
   async message(sessionId: string, text: string, actor: Actor): Promise<SessionSummary> {
     const row = this.requireRow(sessionId);
     this.audit(actor, "session.message", sessionId, null, `chars=${text.length}`);
@@ -214,15 +239,43 @@ export class SessionManager {
       live.idleTimer = null;
       live.lastAssistantText = null;
       this.appendTimeline(sessionId, "user_message", text);
-      live.input.pushText(text);
+      if (!this.supersedeOpenRequests(sessionId, text, actor)) live.input.pushText(text);
       this.patch(sessionId, { status: "running", endReason: null, errorMessage: null, awaitingReply: false });
       return this.get(sessionId);
     }
-    if (live) throw new EngineError("CONFLICT", "The session is shutting down; try again in a moment.");
+    if (live) return this.enqueue(row, text);
     const externalRunEnded = ["done", "error", "usage_limit"].includes(row.status) || (row.awaitingReply && row.endReason !== null);
     if (row.origin === "hook" && !externalRunEnded) {
-      throw new EngineError("CONFLICT", "This session is still running in an external claude -p process.");
+      if (this.supersedeOpenRequests(sessionId, text, actor)) {
+        this.appendTimeline(sessionId, "user_message", text);
+        return this.get(sessionId);
+      }
+      return this.enqueue(row, text);
     }
+    return this.resumeWith(row, [...row.queuedMessages, text], actor);
+  }
+
+  /** Drops queued messages without sending them. */
+  clearQueue(sessionId: string, actor: Actor): SessionSummary {
+    const row = this.requireRow(sessionId);
+    if (row.queuedMessages.length > 0) {
+      this.audit(actor, "session.queue_clear", sessionId, null, `count=${row.queuedMessages.length}`);
+      this.patch(sessionId, { queuedMessages: [] });
+    }
+    return this.get(sessionId);
+  }
+
+  private enqueue(row: SessionRow, text: string): SessionSummary {
+    if (row.queuedMessages.length >= MAX_QUEUED_MESSAGES) {
+      throw new EngineError("CONFLICT", `At most ${MAX_QUEUED_MESSAGES} messages can wait in the queue.`);
+    }
+    this.patch(row.id, { queuedMessages: [...row.queuedMessages, text] });
+    return this.get(row.id);
+  }
+
+  private async resumeWith(row: SessionRow, messages: readonly string[], actor: Actor): Promise<SessionSummary> {
+    const sessionId = row.id;
+    const text = messages.join("\n\n");
     // A new prompt supersedes anything deferred: Claude answers the prompt and skips the parked call.
     for (const request of this.deps.store.requestsForSession(sessionId)) {
       if (request.state === "deferred" || request.state === "open") this.cancelRequest(request, actor.id);
@@ -233,10 +286,46 @@ export class SessionManager {
       await assertAllowedDirectory(row.cwd, this.deps.settings().allowedDirectories);
     }
     await this.preflight(profile, actor, sessionId);
-    this.appendTimeline(sessionId, "user_message", text);
-    this.patch(sessionId, { status: "starting", endReason: null, errorMessage: null, usageLimit: null, awaitingReply: false });
+    for (const message of messages) this.appendTimeline(sessionId, "user_message", message);
+    this.patch(sessionId, { status: "starting", endReason: null, errorMessage: null, usageLimit: null, awaitingReply: false, queuedMessages: [] });
     this.launch(row, profile, { kind: "resume", prompt: text });
     return this.get(sessionId);
+  }
+
+  /** Sends what was queued once the session can continue. Failures keep the queue and say why. */
+  private async drainQueue(sessionId: string): Promise<void> {
+    const row = this.deps.store.getSession(sessionId);
+    if (!row || row.queuedMessages.length === 0 || this.live.has(sessionId)) return;
+    if (row.status === "error" || row.status === "usage_limit") {
+      this.appendTimeline(sessionId, "notice", "Queued messages were not sent because the run ended with an error or a usage limit. Send a new message to continue with them.");
+      return;
+    }
+    try {
+      await this.resumeWith(row, row.queuedMessages, QUEUE_ACTOR);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      log.warn("queued messages could not be sent", { sessionId, err });
+      this.appendTimeline(sessionId, "notice", `Queued messages could not be sent: ${reason}`);
+      this.emitSession(sessionId);
+    }
+  }
+
+  /**
+   * A message written while a card is open answers it, as typing a reply does in Claude Code. The first
+   * main-conversation request carries the text; any others are closed so the turn is not stuck on them.
+   * Returns false when no request carried the text (none open, or only subagent ones): the caller sends it.
+   */
+  private supersedeOpenRequests(sessionId: string, text: string, actor: Actor): boolean {
+    const open = this.deps.store.requestsForSession(sessionId).filter((request) => request.state === "open" && this.waiters.has(request.id));
+    if (open.length === 0) return false;
+    const carrier = open.find((request) => request.agentId === null) ?? null;
+    for (const request of open) {
+      const waiter = this.waiters.get(request.id);
+      if (!this.closeRequest(request, "cancelled", null, actor.id)) continue;
+      this.audit(actor, "request.superseded", sessionId, request.id, request === carrier ? "carried_reply" : "");
+      waiter?.resolve({ type: "superseded", reply: request === carrier ? text : null });
+    }
+    return carrier !== null;
   }
 
   async stop(sessionId: string, actor: Actor): Promise<SessionSummary> {
@@ -246,7 +335,7 @@ export class SessionManager {
       if (request.state === "open" || request.state === "deferred") this.cancelRequest(request, actor.id);
     }
     const live = this.live.get(sessionId);
-    this.patch(sessionId, { status: "done", endReason: "stopped_by_user" });
+    this.patch(sessionId, { status: "done", endReason: "stopped_by_user", queuedMessages: [] });
     if (live) {
       live.stopping = true;
       live.idleTimer?.cancel();
@@ -358,6 +447,11 @@ export class SessionManager {
   }
 
   compatEnd(sessionId: string, reason: string): void {
+    this.recordExternalEnd(sessionId, reason);
+    void this.drainQueue(sessionId);
+  }
+
+  private recordExternalEnd(sessionId: string, reason: string): void {
     for (const request of this.deps.store.requestsForSession(sessionId)) {
       if (request.state === "open") this.cancelRequest(request, "hook");
     }
@@ -370,7 +464,7 @@ export class SessionManager {
     }
     this.patch(sessionId, { status: "done", endReason: "completed" });
     this.appendTimeline(sessionId, "notice", `Session ended (${reason}).`);
-    this.deps.lifecycle.lifecycle("session.completed", this.get(sessionId), row.lastMessagePreview);
+    if (row.queuedMessages.length === 0) this.deps.lifecycle.lifecycle("session.completed", this.get(sessionId), row.lastMessagePreview);
   }
 
   /** Waits for the owner to answer a PermissionRequest hook; null when the hook budget runs out. */
@@ -383,6 +477,7 @@ export class SessionManager {
   ): Promise<RequestAnswer | null> {
     const request = this.openRequest(sessionId, toolName, null, input, suggestions, null, { mode: "wait" });
     const outcome = await this.awaitOutcome(request, signal);
+    if (outcome.type === "superseded") return { kind: "permission", decision: "deny", message: supersededReason("permission", outcome.reply) };
     return outcome.type === "answered" ? outcome.answer : null;
   }
 
@@ -511,6 +606,8 @@ export class SessionManager {
         return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: this.expiredMessage(request.policy) } };
       case "cancelled":
         return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: "The question was cancelled." } };
+      case "superseded":
+        return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: supersededReason("question", outcome.reply) } };
     }
   }
 
@@ -536,6 +633,8 @@ export class SessionManager {
           return { behavior: "deny", message: "Paused by Session Hub until the owner decides on this request.", interrupt: true };
         case "cancelled":
           return { behavior: "deny", message: "The request was cancelled.", interrupt: true };
+        case "superseded":
+          return { behavior: "deny", message: supersededReason("permission", outcome.reply) };
       }
     };
   }
@@ -553,6 +652,7 @@ export class SessionManager {
     if (outcome.type === "answered" && outcome.answer.kind === "question") {
       return { behavior: "allow", updatedInput: { ...input, answers: outcome.answer.answers } };
     }
+    if (outcome.type === "superseded") return { behavior: "deny", message: supersededReason("question", outcome.reply) };
     return { behavior: "deny", message: "The question was not answered." };
   }
 
@@ -783,6 +883,11 @@ export class SessionManager {
   }
 
   private onProcessEnd(sessionId: string, live: LiveSession, failure: unknown): void {
+    this.recordProcessEnd(sessionId, live, failure);
+    void this.drainQueue(sessionId);
+  }
+
+  private recordProcessEnd(sessionId: string, live: LiveSession, failure: unknown): void {
     live.idleTimer?.cancel();
     if (this.live.get(sessionId) === live) this.live.delete(sessionId);
     const row = this.deps.store.getSession(sessionId);
