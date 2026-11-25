@@ -12,3 +12,4 @@ apps/desktop/src-tauri/binaries/
 apps/desktop/src-tauri/resources/engine/
 apps/desktop/src-tauri/gen/
 **/spike/out/
+apps/desktop/src-tauri/resources/node/

@@ -22,7 +22,7 @@
 ```bash
 pnpm version:bump patch        # or minor | major | 1.4.0
 # edit CHANGELOG.md (the bump drafts it from commit subjects)
-git commit -am "chore(release): v0.1.1" && git tag v0.1.1 && git push --follow-tags
+git commit -am "chore(release): v0.1.1" && git tag -a v0.1.1 -m "Session Hub 0.1.1" && git push --follow-tags   # -a: --follow-tags only pushes annotated tags
 ```
 
 The CHANGELOG section of a version becomes the release notes and the text shown in the in-app update dialog.

@@ -2,7 +2,7 @@
 // the manifest the in-app updater reads. Run after `pnpm bundle`, on each platform you ship.
 // Needs: gh (logged in), the signed bundle (TAURI_SIGNING_PRIVATE_KEY was set during `pnpm bundle`).
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -22,16 +22,33 @@ const PLATFORM_BY_TRIPLE = {
   "x86_64-apple-darwin": "darwin-x86_64",
   "x86_64-unknown-linux-gnu": "linux-x86_64",
 };
+/**
+ * Updater artifacts per bundle folder. macOS names its updater archive without a version, so the version is
+ * read from the .app it was made from, and the asset gets a versioned, per-architecture name.
+ */
 const UPDATER_ARTIFACTS = [
-  { dir: "nsis", match: (name) => name.endsWith("-setup.exe") },
+  { dir: "nsis", match: (name) => name.endsWith("-setup.exe") && name.includes(version) },
   { dir: "macos", match: (name) => name.endsWith(".app.tar.gz") },
-  { dir: "appimage", match: (name) => name.endsWith(".AppImage") },
+  { dir: "appimage", match: (name) => name.endsWith(".AppImage") && name.includes(version) },
 ];
+/** First-install files that are not updater artifacts (Windows' setup.exe is both). */
+const INSTALLERS = [{ dir: "dmg", match: (name) => name.endsWith(".dmg") && name.includes(`_${version}_`) }];
 
-/** Signed updater artifacts under target/<triple>/release/bundle for this version. */
+/** GitHub turns spaces in asset names into dots; naming assets that way keeps manifest URLs exact. */
+const assetName = (name) => name.replaceAll(" ", ".");
+
+function appVersion(appTarGz) {
+  const plist = path.join(appTarGz.replace(/\.tar\.gz$/, ""), "Contents", "Info.plist");
+  if (!existsSync(plist)) return null;
+  const match = /<key>CFBundleShortVersionString<\/key>\s*<string>([^<]+)<\/string>/.exec(readFileSync(plist, "utf8"));
+  return match?.[1] ?? null;
+}
+
+/** Signed updater artifacts and installers under target/<triple>/release/bundle for this version. */
 function findArtifacts() {
   const targetDir = path.join(root, "target");
-  const found = [];
+  const updaters = [];
+  const installers = [];
   for (const triple of existsSync(targetDir) ? readdirSync(targetDir) : []) {
     const platform = PLATFORM_BY_TRIPLE[triple];
     const bundleDir = path.join(targetDir, triple, "release", "bundle");
@@ -40,16 +57,30 @@ function findArtifacts() {
       const dir = path.join(bundleDir, kind.dir);
       if (!existsSync(dir)) continue;
       for (const name of readdirSync(dir)) {
-        if (!kind.match(name) || !name.includes(version)) continue;
+        if (!kind.match(name)) continue;
         const file = path.join(dir, name);
+        let asset = assetName(name);
+        if (kind.dir === "macos") {
+          const built = appVersion(file);
+          if (built !== version) {
+            console.warn(`skipping ${file}: it was built as ${built ?? "an unknown version"}, not ${version}`);
+            continue;
+          }
+          asset = assetName(`${name.replace(/\.app\.tar\.gz$/, "")}_${version}_${platform.split("-")[1]}.app.tar.gz`);
+        }
         const signature = `${file}.sig`;
         if (!existsSync(signature)) throw new Error(`${name} has no .sig: was the signing key loaded during pnpm bundle?`);
-        found.push({ platform, file, signature: readFileSync(signature, "utf8").trim() });
+        updaters.push({ platform, file, asset, signature: readFileSync(signature, "utf8").trim() });
       }
     }
+    for (const kind of INSTALLERS) {
+      const dir = path.join(bundleDir, kind.dir);
+      if (!existsSync(dir)) continue;
+      for (const name of readdirSync(dir).filter(kind.match)) installers.push({ file: path.join(dir, name), asset: assetName(name) });
+    }
   }
-  if (found.length === 0) throw new Error(`no ${version} bundle found under target/<triple>/release/bundle; run pnpm bundle first`);
-  return found;
+  if (updaters.length === 0) throw new Error(`no ${version} bundle found under target/<triple>/release/bundle; run pnpm bundle first`);
+  return { updaters, installers };
 }
 
 /** The release notes are this version's CHANGELOG section. */
@@ -81,7 +112,7 @@ function existingManifest(workDir) {
   }
 }
 
-const artifacts = findArtifacts();
+const { updaters: artifacts, installers } = findArtifacts();
 const notes = releaseNotes();
 const workDir = mkdtempSync(path.join(tmpdir(), "hub-release-"));
 
@@ -96,15 +127,19 @@ manifest.version = version;
 manifest.notes = notes;
 manifest.pub_date = new Date().toISOString();
 for (const artifact of artifacts) {
-  const asset = path.basename(artifact.file).replaceAll(" ", ".");
   manifest.platforms[artifact.platform] = {
     signature: artifact.signature,
-    url: `https://github.com/${REPO}/releases/download/${tag}/${encodeURIComponent(asset)}`,
+    url: `https://github.com/${REPO}/releases/download/${tag}/${encodeURIComponent(artifact.asset)}`,
   };
 }
 const manifestFile = path.join(workDir, "latest.json");
 writeFileSync(manifestFile, `${JSON.stringify(manifest, null, 2)}\n`);
 
-// GitHub replaces spaces in asset names with dots; the manifest URLs above use the same rule.
-gh(["release", "upload", tag, "--repo", REPO, "--clobber", ...artifacts.map((artifact) => artifact.file), manifestFile], { stdio: "inherit" });
+// Upload copies under their asset names, so what the manifest points at is exactly what is uploaded.
+const uploads = [...artifacts, ...installers].map(({ file, asset }) => {
+  const copy = path.join(workDir, asset);
+  copyFileSync(file, copy);
+  return copy;
+});
+gh(["release", "upload", tag, "--repo", REPO, "--clobber", ...uploads, manifestFile], { stdio: "inherit" });
 console.log(`Published ${artifacts.map((artifact) => artifact.platform).join(", ")} to ${tag}.`);
