@@ -92,9 +92,9 @@ export const MODEL_PRESETS: ReadonlyArray<{ value: string; label: string }> = [
 ];
 
 export const PERMISSION_MODES: ReadonlyArray<{ value: PermissionMode; label: string; hint: string }> = [
+  { value: "auto", label: "Otomatik", hint: "Bir sınıflandırıcı güvenli adımları onaylar, riskliler sorulur." },
   { value: "default", label: "Sor (manuel)", hint: "İzin gerektiren her adım sana sorulur." },
   { value: "acceptEdits", label: "Düzenlemeleri kabul et", hint: "Dosya düzenlemeleri otomatik; komutlar yine sorulur." },
-  { value: "auto", label: "Otomatik", hint: "Bir sınıflandırıcı güvenli adımları onaylar, riskliler sorulur." },
   { value: "plan", label: "Plan", hint: "Sadece plan çıkarır, hiçbir şey çalıştırmaz." },
   { value: "dontAsk", label: "Sorma", hint: "İzinli olmayan her adımı reddeder; hiç soru gelmez." },
 ];

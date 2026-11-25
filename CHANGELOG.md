@@ -1,12 +1,17 @@
 # Changelog
 
-## Yayınlanmamış
+## 0.1.0 — 2026-11-25
 
-- `/` menüsü: Yeni Oturum'da `/` yazınca Claude'un komutları ile bu cihazın ve bağlı cihazların skill'leri listelenir; her satırın sağında skill'in hangi cihazda olduğu yazar. Bir cihazın skill'ini seçmek oturumu o cihaza ve profile sabitler. Açık bir oturumun mesaj kutusunda da çalışır; orada sadece o oturumun cihazı, profili ve proje klasörü kullanılır.
-- Session Hub'ın kendi başlattığı Claude süreçleri, genel kurulu hook'lar yüzünden listede ikinci kez `claude -p` oturumu olarak görünmüyor.
+İlk sürüm.
 
-- Mesaj kutusu artık hiç kilitlenmiyor. Soru ya da izin kartı açıkken yazılan mesaj o kartı cevaplar (Claude metni cevap olarak alır). Harici `claude -p` süreci çalışırken yazılan mesajlar sıraya girer, süreç bitince oturum onlarla devam eder. Sıradaki mesajlar mesaj kutusunun üstünde görünür ve temizlenebilir.
-
-## 0.1.0 — 2026-11-24
-
-- İlk sürüm: headless Claude Code oturumları, soru/izin kartları, defer/resume, claude -p uyumluluğu, yerel API ve hubctl, webhook'lar, P2P cihaz eşleştirme (salt okunur / operatör / tam yetkili), subagent konuşma görünümü, otomatik güncelleme.
+- Claude Code oturumlarını arka planda başlat, sohbet gibi izle, mesaj gönder, durdur ve kaldığı yerden devam ettir.
+- Claude'un soruları ve izin istekleri kart olarak gelir; seçenekli, çoklu seçimli ya da serbest metinle cevaplanır. Cevap gecikirse oturum ertelenir ve cevap verince geçmişiyle birlikte devam eder.
+- Mesaj kutusu hiç kilitlenmez. Kart açıkken yazdığın mesaj o kartı cevaplar. Harici bir `claude -p` süreci çalışırken yazdıkların sıraya girer ve süreç bitince gönderilir.
+- `/` menüsü: Claude'un komutları ile bu cihazın ve bağlı cihazların skill'leri tek listede. Her satır skill'in hangi cihazda olduğunu gösterir; bir cihazın skill'ini seçmek oturumu o cihaza ve profile sabitler.
+- Varsayılan çalışma modu "Otomatik": güvenli adımlar sorulmadan yapılır, riskliler sorulur. Ayarlar → Davranış'tan ve oturum çalışırken değiştirilebilir; model de öyle.
+- Mevcut `claude -p` betikleri hook'lar ya da `hubctl run` ile listede görünür; düz metinle sorulan sorular algılanır ve cevaplanabilir.
+- Alt ajanların (subagent) çalışması ayrı bir konuşma penceresinde canlı izlenir.
+- Cihazlar arası eşleştirme (P2P): her cihaz kendi oturumlarını yönetir; eşleşen cihaza salt okunur, operatör ya da tam yetki verilir.
+- Yerel API, `hubctl` komut satırı ve imzalı webhook'lar ile entegrasyon.
+- Kullanım limiti koruması: abonelikten API anahtarına asla kendiliğinden geçilmez; limit dolunca oturum durur ve kararını bekler.
+- İmzalı otomatik güncelleme (depo herkese açık olduğunda çalışır).

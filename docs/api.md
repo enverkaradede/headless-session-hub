@@ -44,7 +44,7 @@ Errors use the body `{ "error": { "code", "message" } }`:
   "name": "nightly", "labels": ["ci"],
   "profileId": "default",
   "appendSystemPrompt": "…",
-  "permissionMode": "default",          // default | acceptEdits | plan | dontAsk | auto
+  "permissionMode": "auto",             // auto | default | acceptEdits | plan | dontAsk; omitted: the settings default (auto)
   "model": "sonnet",
   "allowedTools": ["Read", "Bash(npm test:*)"], "disallowedTools": ["WebFetch"],
   "env": { "FEATURE_FLAG": "1" },        // auth/provider variables are rejected

@@ -86,6 +86,25 @@ pnpm release     # creates/updates GitHub Release v<v>, uploads the installer an
 `pnpm release` merges into an existing `latest.json`. A macOS build published to the same tag later
 (`pnpm bundle && pnpm release` on the Mac) adds `darwin-*` next to `windows-x86_64`.
 
+## Release on macOS
+
+The key file and its Keychain password go straight into the build's environment; neither is printed.
+
+```bash
+git pull --tags && pnpm install && pnpm test
+TAURI_SIGNING_PRIVATE_KEY="$(cat ~/.config/session-hub/updater.key)" \
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$(security find-generic-password -s session-hub-updater-key-password -w)" \
+pnpm bundle      # Apple Silicon by default; target/aarch64-apple-darwin/release/bundle/{dmg,macos}
+pnpm release     # adds darwin-aarch64 to the same GitHub Release and latest.json
+```
+
+Both platforms bundle the latest Node 24 LTS from nodejs.org (checked against SHASUMS256), never the build
+machine's own Node.
+
+The app is not signed with an Apple Developer ID. A downloaded `.dmg` therefore opens only after
+right-click → Open (or `xattr -dr com.apple.quarantine "/Applications/Session Hub.app"`). In-app updates
+are verified with the updater key and do not need this.
+
 ## Checklist per release
 
 - [ ] `pnpm test`, `pnpm typecheck`, `pnpm lint:rust` green

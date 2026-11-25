@@ -2,11 +2,12 @@
 //   node scripts/prepare-bundle.mjs [--target <rust-triple>]
 // It places what ships next to the Tauri binary, then runs `tauri build`:
 //   resources/engine/engine.mjs      the engine bundle
-//   resources/node/node[.exe]        Node for the TARGET (copied when target == host, else downloaded + verified)
+//   resources/node/node[.exe]        Node LTS for the TARGET, downloaded from nodejs.org and checked against SHASUMS256
 //   binaries/hubctl-<triple>[.exe]   the hubctl sidecar (Tauri externalBin naming)
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -16,10 +17,15 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const desktopDir = path.join(root, "apps", "desktop");
 const tauriDir = path.join(desktopDir, "src-tauri");
 
-/** Node distribution folder for each supported target triple. */
+/**
+ * How nodejs.org ships Node for each supported target: Windows as a standalone node.exe, macOS as a tarball
+ * whose bin/node is extracted. `indexFile` is the tag in dist/index.json that says the build exists.
+ */
 const NODE_DIST = {
-  "x86_64-pc-windows-msvc": "win-x64",
-  "aarch64-pc-windows-msvc": "win-arm64",
+  "x86_64-pc-windows-msvc": { kind: "exe", dist: "win-x64", indexFile: "win-x64-exe" },
+  "aarch64-pc-windows-msvc": { kind: "exe", dist: "win-arm64", indexFile: "win-arm64-exe" },
+  "aarch64-apple-darwin": { kind: "tar", dist: "darwin-arm64", indexFile: "osx-arm64-tar" },
+  "x86_64-apple-darwin": { kind: "tar", dist: "darwin-x64", indexFile: "osx-x64-tar" },
 };
 
 function run(command, args, cwd = root) {
@@ -39,34 +45,53 @@ function argValue(name) {
   return index >= 0 ? process.argv[index + 1] : undefined;
 }
 
-/** Latest release of the bundled LTS line that has a standalone node.exe for this platform. */
-async function resolveNodeVersion(dist) {
+/** Latest release of the bundled LTS line that nodejs.org ships for this platform. */
+async function resolveNodeVersion(spec) {
   const index = await (await fetch("https://nodejs.org/dist/index.json")).json();
-  const release = index.find((entry) => entry.version.startsWith(`v${BUNDLED_NODE_MAJOR}.`) && entry.files.includes(`${dist}-exe`));
-  if (!release) throw new Error(`no Node ${BUNDLED_NODE_MAJOR} release with ${dist}-exe on nodejs.org`);
+  const release = index.find((entry) => entry.version.startsWith(`v${BUNDLED_NODE_MAJOR}.`) && entry.files.includes(spec.indexFile));
+  if (!release) throw new Error(`no Node ${BUNDLED_NODE_MAJOR} release with ${spec.indexFile} on nodejs.org`);
   return release.version;
+}
+
+async function download(url) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`download failed: HTTP ${response.status} for ${url}`);
+  return Buffer.from(await response.arrayBuffer());
 }
 
 /** Downloads the bundled Node for the target from nodejs.org and checks it against SHASUMS256.txt. */
 async function downloadNode(target, destination) {
-  const dist = NODE_DIST[target];
-  if (!dist) throw new Error(`no Node download mapping for ${target}; build on that platform instead`);
-  const version = await resolveNodeVersion(dist);
+  const spec = NODE_DIST[target];
+  if (!spec) throw new Error(`no Node download mapping for ${target}`);
+  const version = await resolveNodeVersion(spec);
   const base = `https://nodejs.org/dist/${version}`;
-  console.log(`> downloading Node ${version} ${dist}/node.exe`);
+  const file = spec.kind === "exe" ? `${spec.dist}/node.exe` : `node-${version}-${spec.dist}.tar.gz`;
+  console.log(`> downloading Node ${version} ${file}`);
   const sums = await (await fetch(`${base}/SHASUMS256.txt`)).text();
   const expected = sums
     .split("\n")
     .map((line) => line.trim().split(/\s+/))
-    .find(([, file]) => file === `${dist}/node.exe`)?.[0];
-  if (!expected) throw new Error(`SHASUMS256.txt for ${version} has no ${dist}/node.exe`);
-  const response = await fetch(`${base}/${dist}/node.exe`);
-  if (!response.ok) throw new Error(`Node download failed: HTTP ${response.status}`);
-  const bytes = Buffer.from(await response.arrayBuffer());
+    .find(([, name]) => name === file)?.[0];
+  if (!expected) throw new Error(`SHASUMS256.txt for ${version} has no ${file}`);
+  const bytes = await download(`${base}/${file}`);
   const actual = createHash("sha256").update(bytes).digest("hex");
-  if (actual !== expected) throw new Error(`Node checksum mismatch for ${dist}/node.exe (expected ${expected}, got ${actual})`);
-  writeFileSync(destination, bytes);
+  if (actual !== expected) throw new Error(`Node checksum mismatch for ${file} (expected ${expected}, got ${actual})`);
   console.log(`  verified sha256 ${actual}`);
+  if (spec.kind === "exe") {
+    writeFileSync(destination, bytes);
+  } else {
+    const work = mkdtempSync(path.join(tmpdir(), "hub-node-"));
+    try {
+      const archive = path.join(work, "node.tar.gz");
+      writeFileSync(archive, bytes);
+      const member = `node-${version}-${spec.dist}/bin/node`;
+      run("tar", ["-xzf", archive, "-C", work, member]);
+      copyFileSync(path.join(work, member), destination);
+      chmodSync(destination, 0o755);
+    } finally {
+      rmSync(work, { recursive: true, force: true });
+    }
+  }
   return version;
 }
 
@@ -75,7 +100,7 @@ function ensureRustTarget(target) {
   const sysroot = execFileSync("rustc", ["--print", "sysroot"], { encoding: "utf8" }).trim();
   if (existsSync(path.join(sysroot, "lib", "rustlib", target))) return;
   try {
-    ensureRustTarget(target);
+    run("rustup", ["target", "add", target]);
   } catch (err) {
     if (err?.code !== "ENOENT") throw err;
     console.error(
@@ -92,7 +117,7 @@ function ensureRustTarget(target) {
 
 // Updater artifacts are signed during `tauri build`; fail before minutes of compiling, not after.
 if (!process.env.TAURI_SIGNING_PRIVATE_KEY) {
-  console.error("TAURI_SIGNING_PRIVATE_KEY is not set. Run `. .\\scripts\\signing-env.ps1` first (docs/releasing.md).");
+  console.error("TAURI_SIGNING_PRIVATE_KEY is not set. Windows: `. .\\scripts\\signing-env.ps1`; macOS: see docs/releasing.md (Release on macOS).");
   process.exit(1);
 }
 
@@ -103,7 +128,7 @@ const targetIsWindows = target.includes("windows");
 const exe = (name) => (targetIsWindows ? `${name}.exe` : name);
 console.log(`Building for ${target} on ${host}`);
 
-run("rustup", ["target", "add", target]);
+ensureRustTarget(target);
 
 // 1. Engine bundle (platform independent JavaScript)
 run(process.execPath, ["build.mjs"], path.join(root, "packages", "engine"));
@@ -117,15 +142,8 @@ const nodeOut = path.join(tauriDir, "resources", "node");
 rmSync(nodeOut, { recursive: true, force: true });
 mkdirSync(nodeOut, { recursive: true });
 const nodeTarget = path.join(nodeOut, exe("node"));
-let bundledNode;
-if (NODE_DIST[target]) {
-  bundledNode = await downloadNode(target, nodeTarget);
-} else {
-  // Non-Windows targets are developer builds: reuse this machine's Node.
-  copyFileSync(process.execPath, nodeTarget);
-  chmodSync(nodeTarget, 0o755);
-  bundledNode = process.version;
-}
+// Always the LTS from nodejs.org: the build machine's own Node (nvm, Homebrew, a newer major) never ships.
+const bundledNode = await downloadNode(target, nodeTarget);
 
 // 3. hubctl sidecar
 run("cargo", ["build", "--release", "-p", "hubctl", "--target", target]);

@@ -268,7 +268,7 @@ export const DEFAULT_SETTINGS: EngineSettings = {
   eventRetentionDays: 30,
   claudePath: null,
   defaultModel: null,
-  defaultPermissionMode: "default",
+  defaultPermissionMode: "auto",
   askViaTool: true,
   webhooks: [],
 };

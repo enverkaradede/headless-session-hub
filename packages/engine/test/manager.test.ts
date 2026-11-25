@@ -113,7 +113,7 @@ describe("SessionManager — defer and resume", () => {
     await waitFor(() => second.length === 1);
     expect(h.fake.calls[1]?.resume).toBe(session.id);
     expect(h.fake.calls[1]?.sessionId).toBeUndefined();
-    expect(h.fake.calls[1]?.permissionMode).toBe("default");
+    expect(h.fake.calls[1]?.permissionMode).toBe("auto"); // the stored launch mode (default: auto) is passed again on resume
     expect(second[0]).toMatchObject({ hookSpecificOutput: { permissionDecision: "allow", updatedInput: { answers: { "Which colour?": "blue" } } } });
     await waitFor(() => h.manager.get(session.id).status === "done");
   });
