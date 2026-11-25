@@ -145,7 +145,7 @@ export function classifyAuth(profileId: string, exitCode: number, stdout: string
   const method = typeof parsed?.authMethod === "string" ? parsed.authMethod : null;
   const plan = typeof parsed?.subscriptionType === "string" ? parsed.subscriptionType : null;
   if (exitCode !== 0 || method === "none" || parsed?.loggedIn === false) {
-    return { profileId, method: "not_logged_in", detail: "Not logged in. Run `claude` once and log in for this profile.", checkedAt: now };
+    return { profileId, method: "not_logged_in", detail: "Not logged in", checkedAt: now };
   }
   if (method && SUBSCRIPTION_METHODS.has(method)) {
     return { profileId, method: "subscription", detail: plan ? `Subscription (${plan})` : "Subscription", checkedAt: now };

@@ -1,21 +1,28 @@
 /** Chat-style timeline: user/assistant bubbles, collapsible tool calls paired with their results, system lines. */
 import type { TimelineEvent } from "@hub/protocol";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { Brain, Check, ChevronRight, CircleAlert, Copy, FileText, Flag, Globe, Hammer, MessageCircleQuestion, ShieldQuestion, SquareTerminal } from "lucide-react";
+import { Brain, Check, ChevronRight, CircleAlert, Copy, FileText, Flag, Globe, Hammer, MessageCircleQuestion, Send, ShieldQuestion, SquareTerminal } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { memo, useMemo, useState, type ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { formatClock, formatCost } from "../lib/format";
 import { SubagentCard } from "./SubagentPane";
-import { isSubagentCall, type SubagentInfo } from "./subagents";
+import { handbackReport, isSubagentCall, type SubagentInfo } from "./subagents";
 
 const EMPTY_SET: ReadonlySet<string> = new Set();
 
 type Item =
   | { kind: "event"; event: TimelineEvent }
   | { kind: "tool"; use: TimelineEvent; result: TimelineEvent | null }
-  | { kind: "subagent"; id: string };
+  | { kind: "subagent"; id: string }
+  | { kind: "handback"; event: TimelineEvent; report: string };
+
+/** The empty zero-turn result older engines stored when the CLI closed; it is not a turn. */
+function isEmptyClosingResult(event: TimelineEvent): boolean {
+  const data = (event.data ?? {}) as { turns?: number; subtype?: string };
+  return event.kind === "result" && data.turns === 0 && (data.subtype ?? "success") === "success" && event.text === "Finished";
+}
 
 /**
  * Items of one conversation scope (main = null, or a subagent's call id). Every tool_use is paired
@@ -31,7 +38,10 @@ function buildItems(events: readonly TimelineEvent[], scope: string | null): Ite
   for (const event of scoped) {
     if (event.kind === "tool_result" && event.toolUseId) continue;
     if (event.kind === "status" && event.parentToolUseId !== null) continue; // summarised on the card
-    if (isSubagentCall(event) && event.toolUseId) items.push({ kind: "subagent", id: event.toolUseId });
+    if (isEmptyClosingResult(event)) continue;
+    const report = handbackReport(event);
+    if (report) items.push({ kind: "handback", event, report });
+    else if (isSubagentCall(event) && event.toolUseId) items.push({ kind: "subagent", id: event.toolUseId });
     else if (event.kind === "tool_use") items.push({ kind: "tool", use: event, result: event.toolUseId ? (results.get(event.toolUseId) ?? null) : null });
     else items.push({ kind: "event", event });
   }
@@ -57,7 +67,7 @@ export const Timeline = memo(function Timeline({
       <AnimatePresence initial={false}>
         {items.map((item) => (
           <motion.div
-            key={item.kind === "tool" ? `t${item.use.seq}` : item.kind === "subagent" ? `a${item.id}` : `e${item.event.seq}`}
+            key={item.kind === "tool" ? `t${item.use.seq}` : item.kind === "subagent" ? `a${item.id}` : item.kind === "handback" ? `h${item.event.seq}` : `e${item.event.seq}`}
             initial={{ opacity: 0, y: 6 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ type: "spring", stiffness: 500, damping: 40 }}
@@ -69,6 +79,8 @@ export const Timeline = memo(function Timeline({
                 const info = subagents.get(item.id);
                 return info ? <SubagentCard info={info} open={openIds.has(item.id)} onOpen={() => onOpenSubagent(item.id)} /> : null;
               })()
+            ) : item.kind === "handback" ? (
+              <HandbackRow report={item.report} />
             ) : (
               <EventRow event={item.event} />
             )}
@@ -120,6 +132,21 @@ function Markdown({ text }: { text: string }) {
       >
         {text}
       </ReactMarkdown>
+    </div>
+  );
+}
+
+/** A subagent's report to the conversation that started it, shown as its final message. */
+function HandbackRow({ report }: { report: string }) {
+  return (
+    <div className="group flex gap-1.5">
+      <div className="max-w-[86%] rounded-2xl rounded-tl-md border border-violet-glow/25 bg-violet-glow/[0.06] px-4 py-2.5">
+        <div className="mb-1 flex items-center gap-1.5 text-[11px] font-medium text-violet-glow">
+          <Send className="size-3" /> Ana konuşmaya rapor
+        </div>
+        <Markdown text={report} />
+      </div>
+      <CopyButton text={report} />
     </div>
   );
 }

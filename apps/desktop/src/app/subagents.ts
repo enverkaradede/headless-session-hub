@@ -1,6 +1,19 @@
 /** Derives subagent state from a session timeline: each Agent/Task call owns a nested transcript. */
 import { SUBAGENT_TOOLS, type SubagentStatusData, type TimelineEvent } from "@hub/protocol";
 
+/**
+ * Newer CLIs let a subagent hand its report back with this tool; the completion notice then only says
+ * "delivered via SubagentHandback". The report itself is the call's `message`.
+ */
+export const HANDBACK_TOOL = "SubagentHandback";
+
+/** The report text a SubagentHandback call carries, if this event is one. */
+export function handbackReport(event: TimelineEvent): string | null {
+  if (event.kind !== "tool_use" || event.toolName !== HANDBACK_TOOL) return null;
+  const message = (event.data as { message?: unknown } | null)?.message;
+  return typeof message === "string" && message.trim() ? message : null;
+}
+
 export type SubagentState = "running" | "completed" | "failed" | "stopped";
 
 export interface SubagentInfo {
@@ -12,6 +25,8 @@ export interface SubagentInfo {
   state: SubagentState;
   steps: number;
   summary: string | null;
+  /** The subagent's own report, when it handed one back. Preferred over the CLI's completion notice. */
+  report: string | null;
   lastActivity: string | null;
   totalTokens: number | null;
   startedAt: number;
@@ -34,6 +49,7 @@ export function buildSubagentIndex(events: readonly TimelineEvent[]): Map<string
         state: "running",
         steps: 0,
         summary: null,
+        report: null,
         lastActivity: null,
         totalTokens: null,
         startedAt: event.ts,
@@ -49,7 +65,10 @@ export function buildSubagentIndex(events: readonly TimelineEvent[]): Map<string
     }
     const owner = event.parentToolUseId ? index.get(event.parentToolUseId) : undefined;
     if (!owner) continue;
-    if (event.kind === "tool_use") {
+    const report = handbackReport(event);
+    if (report) {
+      owner.report = report;
+    } else if (event.kind === "tool_use") {
       owner.steps += 1;
       owner.lastActivity = event.toolName;
     } else if (event.kind === "status") {
@@ -61,6 +80,9 @@ export function buildSubagentIndex(events: readonly TimelineEvent[]): Map<string
     } else if (event.kind === "assistant_text" && !owner.summary) {
       owner.lastActivity = event.text.split("\n")[0]?.slice(0, 120) ?? owner.lastActivity;
     }
+  }
+  for (const info of index.values()) {
+    if (info.report) info.summary = info.report;
   }
   return index;
 }

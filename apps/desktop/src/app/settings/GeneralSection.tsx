@@ -5,6 +5,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { FolderPlus, KeyRound, Plus, Power, RefreshCw, Star, Terminal, Trash2, UserRound } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useEffect, useState } from "react";
+import { loginCommand } from "../../lib/format";
 import { LOCAL, rpc } from "../../lib/ipc";
 import { useHub } from "../../lib/store";
 import { Button, Card, Chip, Input, Row, TextField, Toggle } from "../../ui/kit";
@@ -171,11 +172,7 @@ export function GeneralSection({ device, settings, update }: SectionProps) {
         {device === LOCAL && <AutostartRow />}
       </Card>
 
-      {device === LOCAL && info?.auth.some((auth) => auth.method === "not_logged_in") && (
-        <p className="flex items-center gap-2 px-1 text-[12.5px] text-beacon-200">
-          <KeyRound className="size-4" /> Giriş yapılmamış profil var: terminalde o profille <span className="font-mono">claude</span> çalıştırıp giriş yap.
-        </p>
-      )}
+      {device === LOCAL && <LoginHelp profiles={settings.profiles.filter((profile) => authFor(profile.id)?.method === "not_logged_in")} platform={info?.platform ?? ""} claudePath={info?.claudePath ?? null} />}
     </>
   );
 }
@@ -204,5 +201,34 @@ function AutostartRow() {
         <Toggle label="Girişte başlat" checked={enabled ?? false} disabled={enabled === null} onChange={(next) => void change(next)} />
       </div>
     </Row>
+  );
+}
+
+/** For each profile without a login: the exact command that opens Claude Code under it, ready to copy. */
+function LoginHelp({ profiles, platform, claudePath }: { profiles: ClaudeProfile[]; platform: string; claudePath: string | null }) {
+  const { push } = useToasts();
+  if (profiles.length === 0) return null;
+  return (
+    <div className="space-y-2 rounded-xl border border-beacon-400/25 bg-beacon-400/[0.06] p-3.5 text-[12.5px] text-beacon-200">
+      <div className="flex items-center gap-2 font-medium">
+        <KeyRound className="size-4" /> Giriş yapılmamış profil var. Terminalde bu komutu çalıştır, açılan Claude'da <span className="font-mono">/login</span> yaz, sonra "Girişleri kontrol et"e bas.
+      </div>
+      {profiles.map((profile) => {
+        const command = loginCommand(profile.configDir, platform, claudePath);
+        return (
+          <div key={profile.id} className="flex items-center gap-2 pl-6">
+            <span className="w-20 shrink-0 truncate text-ink-200">{profile.name}</span>
+            <code className="min-w-0 flex-1 truncate rounded-md bg-harbor-950/70 px-2 py-1 font-mono text-[11.5px] text-ink-50">{command}</code>
+            <Button
+              size="sm"
+              variant="subtle"
+              onClick={() => void navigator.clipboard.writeText(command).then(() => push("success", "Komut kopyalandı"))}
+            >
+              Kopyala
+            </Button>
+          </div>
+        );
+      })}
+    </div>
   );
 }

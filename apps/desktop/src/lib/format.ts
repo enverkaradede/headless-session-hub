@@ -91,6 +91,16 @@ export const MODEL_PRESETS: ReadonlyArray<{ value: string; label: string }> = [
   { value: "haiku", label: "Haiku" },
 ];
 
+/**
+ * The preset a model value belongs to. Running sessions report full ids ("claude-haiku-5-5", "claude-opus-5-5[1m]");
+ * those map to their family so the picker shows "Haiku" instead of a custom id. Null means a truly custom model.
+ */
+export function modelPreset(value: string): string | null {
+  if (MODEL_PRESETS.some((preset) => preset.value === value)) return value;
+  const family = /^claude-(opus|sonnet|haiku)(?:-|$)/i.exec(value.trim())?.[1]?.toLowerCase();
+  return family && MODEL_PRESETS.some((preset) => preset.value === family) ? family : null;
+}
+
 export const PERMISSION_MODES: ReadonlyArray<{ value: PermissionMode; label: string; hint: string }> = [
   { value: "auto", label: "Otomatik", hint: "Bir sınıflandırıcı güvenli adımları onaylar, riskliler sorulur." },
   { value: "default", label: "Sor (manuel)", hint: "İzin gerektiren her adım sana sorulur." },
@@ -98,3 +108,18 @@ export const PERMISSION_MODES: ReadonlyArray<{ value: PermissionMode; label: str
   { value: "plan", label: "Plan", hint: "Sadece plan çıkarır, hiçbir şey çalıştırmaz." },
   { value: "dontAsk", label: "Sorma", hint: "İzinli olmayan her adımı reddeder; hiç soru gelmez." },
 ];
+
+/**
+ * The terminal command that opens Claude Code under a profile's config folder, to log that profile in. The full
+ * executable path is used when known, since `claude` itself may be aliased or missing from PATH.
+ */
+export function loginCommand(configDir: string | null, platform: string, claudePath: string | null = null): string {
+  if (platform === "win32") {
+    const exe = claudePath ? `& "${claudePath}"` : "claude";
+    return configDir ? `$env:CLAUDE_CONFIG_DIR="${configDir}"; ${exe}` : exe;
+  }
+  const exe = claudePath ? (/\s/.test(claudePath) ? `"${claudePath}"` : claudePath) : "claude";
+  // Quoting would stop "~" from expanding, so only folders with spaces are quoted.
+  const dir = configDir && /\s/.test(configDir) ? `"${configDir}"` : configDir;
+  return dir ? `CLAUDE_CONFIG_DIR=${dir} ${exe}` : exe;
+}

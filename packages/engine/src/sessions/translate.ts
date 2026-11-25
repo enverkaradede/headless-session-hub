@@ -102,6 +102,11 @@ function oneLine(text: string): string {
   return flat.length > PREVIEW_CHARS ? `${flat.slice(0, PREVIEW_CHARS - 1)}…` : flat;
 }
 
+/** A successful result that ran no turn and said nothing. */
+export function isEmptyTurn(subtype: string, turns: number, text: string): boolean {
+  return subtype === "success" && turns === 0 && text.trim() === "";
+}
+
 export function translate(message: SDKMessage): Translation {
   switch (message.type) {
     case "system": {
@@ -182,6 +187,9 @@ export function translate(message: SDKMessage): Translation {
         outputTokens,
         deferredToolUseId: deferred?.id ?? null,
       };
+      // The CLI can close with an empty zero-turn result (e.g. after a background subagent reported back):
+      // it changes nothing the owner can see, so it updates the session but adds no "turn finished" line.
+      if (isEmptyTurn(message.subtype, message.num_turns, text)) return { drafts: [], result };
       const summary = message.subtype === "success" ? "Finished" : `Ended: ${message.subtype}`;
       return {
         drafts: [draft("result", text ? truncateText(text) : summary, { data: { subtype: message.subtype, stopReason: message.stop_reason, costUsd: message.total_cost_usd, turns: message.num_turns } })],
