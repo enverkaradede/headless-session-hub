@@ -14,17 +14,27 @@ type SourceState = { status: "loading" } | { status: "ready"; commands: CatalogC
 const cache = new Map<string, { at: number; commands: CatalogCommand[] }>();
 const sourceKey = (source: CatalogSource) => `${source.device}\u0000${source.profileId}\u0000${source.cwd ?? ""}`;
 
+/** A paired device whose Session Hub predates the `/` menu answers with this. */
+export function isOutdatedEngine(err: unknown): boolean {
+  return err instanceof HubError && err.code === "NOT_FOUND" && err.message.startsWith("Unknown method");
+}
+
 async function fetchCatalog(source: CatalogSource): Promise<CatalogCommand[]> {
   const key = sourceKey(source);
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < UI_CACHE_MS) return hit.commands;
   let commands: CatalogCommand[];
   try {
-    commands = (await rpc(source.device, "catalog.list", { profileId: source.profileId, ...(source.cwd ? { cwd: source.cwd } : {}) })).commands;
+    try {
+      commands = (await rpc(source.device, "catalog.list", { profileId: source.profileId, ...(source.cwd ? { cwd: source.cwd } : {}) })).commands;
+    } catch (err) {
+      // A folder outside the allowlist still gets the profile's own skills, just not the project's.
+      if (!(err instanceof HubError && err.code === "DIRECTORY_NOT_ALLOWED" && source.cwd)) throw err;
+      commands = (await rpc(source.device, "catalog.list", { profileId: source.profileId })).commands;
+    }
   } catch (err) {
-    // A folder outside the allowlist still gets the profile's own skills, just not the project's.
-    if (!(err instanceof HubError && err.code === "DIRECTORY_NOT_ALLOWED" && source.cwd)) throw err;
-    commands = (await rpc(source.device, "catalog.list", { profileId: source.profileId })).commands;
+    if (isOutdatedEngine(err)) throw new HubError("OUTDATED", "Bu cihazdaki Session Hub eski sürüm; skill'leri listelemek için o cihazı güncelle.");
+    throw err;
   }
   cache.set(key, { at: Date.now(), commands });
   return commands;
