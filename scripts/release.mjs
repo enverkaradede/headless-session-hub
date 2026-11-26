@@ -109,6 +109,22 @@ function releaseExists() {
   }
 }
 
+/** Uploads over a flaky connection: a few attempts with a growing pause, then the error. */
+const UPLOAD_ATTEMPTS = 3;
+const UPLOAD_BACKOFF_MS = 5_000;
+function uploadWithRetry(file) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      gh(["release", "upload", tag, "--repo", REPO, "--clobber", file], { stdio: "inherit" });
+      return;
+    } catch (err) {
+      if (attempt >= UPLOAD_ATTEMPTS) throw err;
+      console.warn(`Upload of ${path.basename(file)} failed (attempt ${attempt}/${UPLOAD_ATTEMPTS}); retrying.`);
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, UPLOAD_BACKOFF_MS * attempt);
+    }
+  }
+}
+
 /** Merges with the latest.json already on the release so per-platform builds can be published separately. */
 function existingManifest(workDir) {
   try {
@@ -148,8 +164,20 @@ const uploads = [...artifacts, ...installers].map(({ file, asset }) => {
   copyFileSync(file, copy);
   return copy;
 });
-gh(["release", "upload", tag, "--repo", REPO, "--clobber", ...uploads, manifestFile], { stdio: "inherit" });
+// Installers first, the manifest last: a manifest that names an asset which never finished uploading would
+// let installs try to download a file that is not there.
+for (const file of uploads) uploadWithRetry(file);
+uploadWithRetry(manifestFile);
 console.log(`Uploaded ${artifacts.map((artifact) => artifact.platform).join(", ")} to ${tag}.`);
+
+const assetNames = new Set(JSON.parse(gh(["release", "view", tag, "--repo", REPO, "--json", "assets"])).assets.map((asset) => asset.name));
+const unreachable = Object.entries(manifest.platforms)
+  .filter(([, entry]) => !assetNames.has(decodeURIComponent(entry.url.split("/").pop() ?? "")))
+  .map(([platform]) => platform);
+if (unreachable.length > 0) {
+  console.error(`latest.json names assets that are not on ${tag}: ${unreachable.join(", ")}. Not publishing; run pnpm release again on that platform.`);
+  process.exit(1);
+}
 
 const isDraft = gh(["release", "view", tag, "--repo", REPO, "--json", "isDraft", "--jq", ".isDraft"]).trim() === "true";
 const missing = REQUIRED_PLATFORMS.filter((platform) => !manifest.platforms[platform]);
