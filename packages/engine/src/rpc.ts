@@ -2,7 +2,7 @@
 import { RpcSchemas, type Caller, type EngineEvent, type EngineInfo, type HooksStatus, type RpcMethod, type SessionSummary, type TimelineEvent } from "@hub/protocol";
 import type { z } from "zod";
 import { EngineError } from "./errors.ts";
-import { hooksInstalled, installHooks, settingsPathFor, uninstallHooks } from "./hooks/install.ts";
+import { inspectHooks, installHooks, settingsPathFor, uninstallHooks } from "./hooks/install.ts";
 import { maskText, maskValue } from "./masking.ts";
 import type { SessionManager } from "./sessions/manager.ts";
 import type { CatalogService } from "./catalog.ts";
@@ -112,11 +112,10 @@ export class RpcDispatcher {
 
   private async hooksStatus(): Promise<HooksStatus> {
     const profiles = await Promise.all(
-      this.ctx.settings.get().profiles.map(async (profile) => ({
-        profileId: profile.id,
-        installed: await hooksInstalled(profile),
-        settingsPath: settingsPathFor(profile),
-      })),
+      this.ctx.settings.get().profiles.map(async (profile) => {
+        const { installed, health } = await inspectHooks(profile);
+        return { profileId: profile.id, installed, health, settingsPath: settingsPathFor(profile) };
+      }),
     );
     return { hubctlPath: this.ctx.hubctlPath, profiles };
   }

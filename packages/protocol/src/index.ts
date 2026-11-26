@@ -431,7 +431,15 @@ export type EngineInfo = z.infer<typeof EngineInfo>;
 
 export const HooksStatus = z.object({
   hubctlPath: z.string().nullable(),
-  profiles: z.array(z.object({ profileId: z.string(), installed: z.boolean(), settingsPath: z.string() })),
+  profiles: z.array(
+    z.object({
+      profileId: z.string(),
+      installed: z.boolean(),
+      settingsPath: z.string(),
+      /** broken: a hook is missing or runs a hubctl that no longer exists. Absent from 0.1.x engines. */
+      health: z.enum(["not_installed", "ok", "broken"]).optional(),
+    }),
+  ),
 });
 export type HooksStatus = z.infer<typeof HooksStatus>;
 

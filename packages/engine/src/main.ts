@@ -19,6 +19,7 @@ import { Store } from "./db.ts";
 import { EngineError } from "./errors.ts";
 import { EventBus, type LifecycleSink } from "./events.ts";
 import { CompatLayer, type SessionUsage, type UsageReader } from "./hooks/compat.ts";
+import { healHooks } from "./hooks/install.ts";
 import { log } from "./log.ts";
 import { peerEvent, RpcDispatcher } from "./rpc.ts";
 import { SessionManager, type ClaudeHost } from "./sessions/manager.ts";
@@ -80,6 +81,20 @@ class CliClaudeHost implements ClaudeHost {
 
   isNonSubscriptionKeySource(apiKeySource: string): boolean {
     return apiKeySourceIsNonSubscription(apiKeySource);
+  }
+}
+
+/** Repairs each profile's hub hooks after the app moved or was reinstalled; one bad settings file never stops the rest. */
+async function healAllHooks(profiles: readonly ClaudeProfile[], hubctlPath: string, onHealed: (profile: ClaudeProfile) => void): Promise<void> {
+  for (const profile of profiles) {
+    try {
+      if (await healHooks(profile, hubctlPath)) {
+        log.info("hooks repaired", { profileId: profile.id });
+        onHealed(profile);
+      }
+    } catch (err) {
+      log.warn("hook repair failed", { profileId: profile.id, err });
+    }
   }
 }
 
@@ -237,6 +252,7 @@ async function main(): Promise<void> {
   writeLine({ t: "ready", info: info() });
   log.info("engine ready", { apiPort, dataDir });
   void refreshAuth().catch((err: unknown) => log.warn("initial auth refresh failed", { err }));
+  if (hubctlPath) void healAllHooks(settings.get().profiles, hubctlPath, (profile) => manager.audit({ id: "engine" }, "hooks.heal", null, null, `profile=${profile.id}`));
 }
 
 async function handleLine(line: string, rpc: RpcDispatcher): Promise<void> {

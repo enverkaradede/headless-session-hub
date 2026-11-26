@@ -1,6 +1,6 @@
 /** Integrations: Claude Code hooks per profile (claude -p compatibility), local API/hubctl, outgoing webhooks. */
 import type { EngineSettings, HooksStatus, WebhookConfig, WebhookEvent } from "@hub/protocol";
-import { Anchor, Check, Copy, Plus, Terminal, Trash2, Webhook } from "lucide-react";
+import { Anchor, Check, Copy, Plus, Terminal, Trash2, Webhook, Wrench } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useCallback, useEffect, useState } from "react";
 import { LOCAL, rpc } from "../../lib/ipc";
@@ -57,6 +57,18 @@ function CommandLine({ command }: { command: string }) {
   );
 }
 
+const HOOK_TOASTS = {
+  install: "Hook'lar kuruldu; claude -p koşuları listede görünecek",
+  uninstall: "Hook'lar kaldırıldı",
+  repair: "Hook'lar onarıldı; bu kurulumun hubctl'ini kullanıyor",
+} as const;
+
+/** 0.1.x engines send no health: fall back to installed / not installed. */
+function HookHealthChip({ installed, health }: { installed: boolean; health: HooksStatus["profiles"][number]["health"] }) {
+  if (health === "broken") return <Chip tone="rose">Onarılmalı</Chip>;
+  return installed ? <Chip tone="jade">Kurulu</Chip> : <Chip>Kurulu değil</Chip>;
+}
+
 export function IntegrationsSection({ device, settings, update }: SectionProps) {
   const info = useHub((state) => state.devices[device]?.info ?? null);
   const [hooks, setHooks] = useState<HooksStatus | null>(null);
@@ -70,11 +82,11 @@ export function IntegrationsSection({ device, settings, update }: SectionProps) 
   }, [device, push]);
   useEffect(loadHooks, [loadHooks]);
 
-  const toggleHooks = async (profileId: string, install: boolean) => {
+  const changeHooks = async (profileId: string, action: "install" | "uninstall" | "repair") => {
     setBusyProfile(profileId);
     try {
-      setHooks(await rpc(device, install ? "hooks.install" : "hooks.uninstall", { profileId }));
-      push("success", install ? "Hook'lar kuruldu; claude -p koşuları listede görünecek" : "Hook'lar kaldırıldı");
+      setHooks(await rpc(device, action === "uninstall" ? "hooks.uninstall" : "hooks.install", { profileId }));
+      push("success", HOOK_TOASTS[action]);
     } catch (err) {
       push("error", err instanceof Error ? err.message : "Değiştirilemedi");
     } finally {
@@ -96,11 +108,19 @@ export function IntegrationsSection({ device, settings, update }: SectionProps) 
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 text-[13.5px] font-medium">
                       {name}
-                      {profile.installed ? <Chip tone="jade">Kurulu</Chip> : <Chip>Kurulu değil</Chip>}
+                      <HookHealthChip installed={profile.installed} health={profile.health} />
                     </div>
                     <div className="truncate font-mono text-[11.5px] text-ink-500">{profile.settingsPath}</div>
+                    {profile.health === "broken" && (
+                      <p className="mt-1 text-[12px] leading-relaxed text-rose-glow/90">Hook'lar eksik ya da artık bulunmayan bir hubctl'i gösteriyor; uygulama taşınmış ya da yeniden kurulmuş olabilir.</p>
+                    )}
                   </div>
-                  <Toggle label={`${name} hook'ları`} checked={profile.installed} disabled={busyProfile !== null || !hooks.hubctlPath} onChange={(next) => void toggleHooks(profile.profileId, next)} />
+                  {profile.health === "broken" && hooks.hubctlPath && (
+                    <Button size="sm" variant="primary" icon={Wrench} loading={busyProfile === profile.profileId} disabled={busyProfile !== null} onClick={() => void changeHooks(profile.profileId, "repair")}>
+                      Onar
+                    </Button>
+                  )}
+                  <Toggle label={`${name} hook'ları`} checked={profile.installed} disabled={busyProfile !== null || !hooks.hubctlPath} onChange={(next) => void changeHooks(profile.profileId, next ? "install" : "uninstall")} />
                 </div>
               );
             })}

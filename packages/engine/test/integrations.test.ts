@@ -1,11 +1,12 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createHmac } from "node:crypto";
 import type { WebhookConfig } from "@hub/protocol";
 import { describe, expect, it } from "vitest";
 import { CompatLayer } from "../src/hooks/compat.ts";
-import { hookCommand, hooksInstalled, installHooks, uninstallHooks } from "../src/hooks/install.ts";
+import { healHooks, hookCommand, hooksInstalled, inspectHooks, installHooks, parseHubHook, uninstallHooks } from "../src/hooks/install.ts";
 import { buildPayload, signPayload, WebhookDispatcher } from "../src/webhooks.ts";
 import { ACTOR, makeHarness, waitFor } from "./helpers.ts";
 
@@ -27,7 +28,7 @@ describe("hook installation", () => {
     expect(settings.model).toBe("opus");
     expect(settings.hooks.Stop).toHaveLength(2);
     expect(settings.hooks.Stop[0].hooks[0]).toEqual(userHook);
-    expect(settings.hooks.PermissionRequest).toEqual([{ matcher: "*", hooks: [{ type: "command", command: `"${HUBCTL}" hook PermissionRequest`, timeout: 600 }] }]);
+    expect(settings.hooks.PermissionRequest).toEqual([{ matcher: "*", hooks: [{ type: "command", command: hookCommand(HUBCTL, "PermissionRequest", "darwin"), timeout: 600 }] }]);
     expect(await hooksInstalled(profile)).toBe(true);
     expect(readFileSync(`${file}.session-hub.bak`, "utf8")).toContain("my-linter");
   });
@@ -48,8 +49,82 @@ describe("hook installation", () => {
     expect(readFileSync(file, "utf8")).toBe("{ broken");
   });
 
-  it("writes Windows paths with forward slashes so any hook shell can run them", () => {
-    expect(hookCommand("C:\\Users\\AyşeŞahin\\AppData\\Local\\Session Hub\\hubctl.exe", "Stop", "win32")).toBe('"C:/Users/AyşeŞahin/AppData/Local/Session Hub/hubctl.exe" hook Stop');
+  it("writes Windows paths with forward slashes, guarded so a missing hubctl is skipped", () => {
+    expect(hookCommand("C:\\Program Files\\Session Hub\\hubctl.exe", "Stop", "win32")).toBe(
+      "if [ -f 'C:/Program Files/Session Hub/hubctl.exe' ]; then 'C:/Program Files/Session Hub/hubctl.exe' hook Stop; fi",
+    );
+  });
+
+  it("reads back both the guarded form and the unguarded 0.1.x form", () => {
+    const odd = "/Users/o'neil/Session Hub/hubctl";
+    expect(parseHubHook(hookCommand(odd, "Notification", "darwin"))).toEqual({ hubctlPath: odd, event: "Notification", legacy: false });
+    expect(parseHubHook('"C:/Program Files/Session Hub/hubctl.exe" hook SessionStart')).toEqual({ hubctlPath: "C:/Program Files/Session Hub/hubctl.exe", event: "SessionStart", legacy: true });
+    expect(parseHubHook("my-linter --check")).toBeNull();
+  });
+});
+
+/** A stand-in hubctl that prints its arguments, at a path with a space and a quote in it. */
+function fakeHubctl(): string {
+  const dir = path.join(mkdtempSync(path.join(tmpdir(), "hub-bin-")), "Session Hub's bin");
+  mkdirSync(dir);
+  const file = path.join(dir, "hubctl");
+  writeFileSync(file, '#!/bin/sh\necho "ran: $*"\n');
+  chmodSync(file, 0o755);
+  return file;
+}
+
+const runHook = (command: string) => execFileSync("/bin/sh", ["-c", command], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+
+describe.skipIf(process.platform === "win32")("hook command in a real shell", () => {
+  it("runs hubctl when it exists, even with a space and a quote in its path", () => {
+    expect(runHook(hookCommand(fakeHubctl(), "SessionStart"))).toBe("ran: hook SessionStart\n");
+  });
+
+  it("succeeds silently when hubctl is gone, so Claude sessions never fail on it", () => {
+    expect(runHook(hookCommand("/nonexistent/Session Hub/hubctl", "SessionStart"))).toBe("");
+  });
+});
+
+describe("hook health and repair", () => {
+  const legacy = (hubctlPath: string) =>
+    Object.fromEntries(["SessionStart", "SessionEnd", "Stop", "Notification", "PermissionRequest"].map((event) => [event, [{ hooks: [{ type: "command", command: `"${hubctlPath}" hook ${event}` }] }]]));
+
+  it("reports hooks that run a missing hubctl as broken, and repairs them to this install", async () => {
+    const { profile, file } = profileDir();
+    const gone = legacy("/gone/Session Hub/hubctl");
+    writeFileSync(file, JSON.stringify({ hooks: { ...gone, Stop: [{ hooks: [{ type: "command", command: "keep-me" }] }, ...(gone.Stop ?? [])] } }));
+    expect(await inspectHooks(profile)).toMatchObject({ installed: true, health: "broken" });
+
+    const current = fakeHubctl();
+    expect(await healHooks(profile, current, "darwin")).toBe(true);
+    const report = await inspectHooks(profile);
+    expect(report.health).toBe("ok");
+    expect(report.hooks.every((hook) => hook.hubctlPath === current && !hook.legacy)).toBe(true);
+    expect(JSON.parse(readFileSync(file, "utf8")).hooks.Stop[0].hooks[0].command).toBe("keep-me");
+    expect(await healHooks(profile, current, "darwin")).toBe(false);
+  });
+
+  it("upgrades this install's unguarded hooks to the guarded form", async () => {
+    const { profile } = profileDir();
+    const current = fakeHubctl();
+    writeFileSync(path.join(profile.configDir, "settings.json"), JSON.stringify({ hooks: legacy(current) }));
+    expect(await healHooks(profile, current, "darwin")).toBe(true);
+    expect((await inspectHooks(profile)).hooks.some((hook) => hook.legacy)).toBe(false);
+  });
+
+  it("leaves hooks that run another install's existing hubctl alone", async () => {
+    const { profile, file } = profileDir();
+    const other = fakeHubctl();
+    await installHooks(profile, other);
+    const before = readFileSync(file, "utf8");
+    expect(await healHooks(profile, fakeHubctl(), "darwin")).toBe(false);
+    expect(readFileSync(file, "utf8")).toBe(before);
+  });
+
+  it("does nothing for a profile without hub hooks", async () => {
+    const { profile } = profileDir();
+    expect(await healHooks(profile, fakeHubctl(), "darwin")).toBe(false);
+    expect(await inspectHooks(profile)).toMatchObject({ installed: false, health: "not_installed" });
   });
 });
 

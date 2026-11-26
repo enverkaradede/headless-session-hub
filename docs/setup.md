@@ -62,7 +62,10 @@ It then runs `tauri build` with `tauri.bundle.conf.json`. The NSIS installer (pe
    sessions may run in (**allowed directories**).
 2. Optional, Settings → General → "Girişte başlat": the app starts hidden in the tray at login.
 3. Optional, Settings → Integrations: turn the hooks on per profile so unchanged `claude -p` scripts
-   show up.
+   show up. Each hook runs `hubctl` only if it exists (`if [ -f '<hubctl>' ]; then … fi`), so moving or
+   uninstalling the app never makes Claude sessions fail. On start the app re-points broken hooks at its
+   own `hubctl`; hooks that run another install's existing `hubctl` are left alone. Claude Code runs hook
+   commands in bash (Git Bash on Windows).
 
 ## Connecting devices (optional)
 

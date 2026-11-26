@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.0 — 2026-11-26
+
+- Hook'lar artık Claude oturumlarını bozmuyor. Session Hub taşınır, başka bir klasöre yeniden kurulur ya da kaldırılırsa eski hook'lar her `claude` açılışında "SessionStart hook failed: … hubctl.exe: No such file or directory" hatası veriyordu. Hook komutu artık `hubctl` yoksa sessizce geçiyor.
+- Uygulama her açılışta bozuk hook'ları kendi `hubctl`'ine bağlıyor ve 0.1.x biçimindeki hook'ları yeni biçime çeviriyor. Başka bir kurulumun (ör. geliştirme sürümünün) çalışan hook'larına dokunmuyor. Her onarım denetim kaydına yazılıyor.
+- Ayarlar → Entegrasyonlar, bozuk hook'ları "Onarılmalı" olarak gösteriyor ve tek tıkla onarıyor.
+
 ## 0.1.1 — 2026-11-26
 
 - Oturum başlığındaki model seçici, çalışan oturumun tam model adını (ör. `claude-haiku-…`) doğru aileyle gösterir; gereksiz "Özel" kutusu açılmaz.

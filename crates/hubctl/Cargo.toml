@@ -1,6 +1,6 @@
 [package]
 name = "hubctl"
-version = "0.1.1"
+version = "0.2.0"
 description = "Session Hub CLI: hook bridge, claude -p wrapper and local API client"
 edition = "2024"
 

@@ -1,5 +1,5 @@
 /** Installs/removes the hub's Claude Code hooks in a profile's settings.json without disturbing other entries. */
-import { access, copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import type { ClaudeProfile } from "@hub/protocol";
@@ -28,16 +28,45 @@ export function settingsPathFor(profile: ClaudeProfile): string {
   return path.join(root, "settings.json");
 }
 
-/** Forward slashes work in Git Bash, cmd and PowerShell alike, and survive double-quoting. */
-export function hookCommand(hubctlPath: string, event: string, platform: NodeJS.Platform = process.platform): string {
-  const normalized = platform === "win32" ? hubctlPath.replaceAll("\\", "/") : hubctlPath;
-  return `"${normalized}" hook ${event}`;
+export type HookEvent = (typeof HOOK_EVENTS)[number];
+
+/** Single-quoted for POSIX shells: nothing inside is expanded, and a quote in the path is escaped as '\''. */
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-const HUB_HOOK_RE = /hubctl(?:\.exe)?" hook (?:SessionStart|SessionEnd|Stop|Notification|PermissionRequest)$/;
+/**
+ * The hook runs hubctl only while it exists, so moving or uninstalling the app never breaks a Claude session
+ * ("hook failed: No such file or directory" on every start). Claude Code runs hook commands in bash: $SHELL on
+ * macOS/Linux and Git Bash on Windows. Forward slashes keep Windows paths valid there.
+ */
+export function hookCommand(hubctlPath: string, event: string, platform: NodeJS.Platform = process.platform): string {
+  const quoted = shellQuote(platform === "win32" ? hubctlPath.replaceAll("\\", "/") : hubctlPath);
+  return `if [ -f ${quoted} ]; then ${quoted} hook ${event}; fi`;
+}
+
+const EVENT_PATTERN = `(${HOOK_EVENTS.join("|")})`;
+/** 0.1.x wrote `"<path>" hook <Event>`, which fails the hook when the path is gone. */
+const LEGACY_HOOK_RE = new RegExp(`^"([^"]*hubctl(?:\\.exe)?)" hook ${EVENT_PATTERN}$`);
+const GUARDED_HOOK_RE = new RegExp(`^if \\[ -f '((?:[^']|'\\\\'')*hubctl(?:\\.exe)?)' \\]; then '\\1' hook ${EVENT_PATTERN}; fi$`);
+
+/** A hub hook found in a settings file: which hubctl it runs and whether it is the old, unguarded form. */
+export interface HubHook {
+  hubctlPath: string;
+  event: HookEvent;
+  legacy: boolean;
+}
+
+export function parseHubHook(command: string): HubHook | null {
+  const guarded = GUARDED_HOOK_RE.exec(command);
+  if (guarded?.[1] && guarded[2]) return { hubctlPath: guarded[1].replaceAll("'\\''", "'"), event: guarded[2] as HookEvent, legacy: false };
+  const legacy = LEGACY_HOOK_RE.exec(command);
+  if (legacy?.[1] && legacy[2]) return { hubctlPath: legacy[1], event: legacy[2] as HookEvent, legacy: true };
+  return null;
+}
 
 function isHubHook(hook: HookCommand): boolean {
-  return typeof hook.command === "string" && HUB_HOOK_RE.test(hook.command);
+  return typeof hook.command === "string" && parseHubHook(hook.command) !== null;
 }
 
 async function readSettings(file: string): Promise<SettingsJson> {
@@ -92,14 +121,71 @@ function withoutHubHooks(settings: SettingsJson): SettingsJson {
   return Object.keys(hooks).length > 0 ? { ...rest, hooks } : rest;
 }
 
-export async function hooksInstalled(profile: ClaudeProfile): Promise<boolean> {
+function hubHooksIn(settings: SettingsJson): HubHook[] {
+  return Object.values(settings.hooks ?? {})
+    .flatMap((matchers) => (Array.isArray(matchers) ? matchers : []))
+    .flatMap((matcher) => matcher.hooks ?? [])
+    .flatMap((hook) => (typeof hook.command === "string" ? (parseHubHook(hook.command) ?? []) : []));
+}
+
+async function isFile(file: string): Promise<boolean> {
+  try {
+    return (await stat(file)).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/** ok: every event runs an existing hubctl. broken: some hook is missing or points at a hubctl that is gone. */
+export type HookHealth = "not_installed" | "ok" | "broken";
+
+export interface HooksReport {
+  installed: boolean;
+  health: HookHealth;
+  hooks: HubHook[];
+  /** Some hook runs a hubctl path where no file exists. */
+  hubctlMissing: boolean;
+}
+
+export async function inspectHooks(profile: ClaudeProfile): Promise<HooksReport> {
   let settings: SettingsJson;
   try {
     settings = await readSettings(settingsPathFor(profile));
   } catch {
-    return false;
+    return { installed: false, health: "not_installed", hooks: [], hubctlMissing: false };
   }
-  return HOOK_EVENTS.every((event) => (settings.hooks?.[event] ?? []).some((matcher) => (matcher.hooks ?? []).some(isHubHook)));
+  const hooks = hubHooksIn(settings);
+  const installed = HOOK_EVENTS.every((event) => hooks.some((hook) => hook.event === event));
+  if (hooks.length === 0) return { installed, health: "not_installed", hooks, hubctlMissing: false };
+  const hubctlMissing = (await Promise.all(hooks.map((hook) => isFile(hook.hubctlPath)))).includes(false);
+  return { installed, health: installed && !hubctlMissing ? "ok" : "broken", hooks, hubctlMissing };
+}
+
+export async function hooksInstalled(profile: ClaudeProfile): Promise<boolean> {
+  return (await inspectHooks(profile)).installed;
+}
+
+function samePath(left: string, right: string, platform: NodeJS.Platform): boolean {
+  if (platform !== "win32") return left === right;
+  const normalize = (value: string) => value.replaceAll("\\", "/").toLowerCase();
+  return normalize(left) === normalize(right);
+}
+
+/**
+ * Re-points the hub's hooks at this install's hubctl when they are broken (app moved, reinstalled elsewhere,
+ * hubctl removed) or still in the unguarded 0.1.x form. Hooks that run another install's existing hubctl
+ * (a dev build next to the release) are left alone; that install heals its own.
+ */
+export async function healHooks(profile: ClaudeProfile, hubctlPath: string, platform: NodeJS.Platform = process.platform): Promise<boolean> {
+  const report = await inspectHooks(profile);
+  if (report.hooks.length === 0) return false;
+  const needsRepair =
+    !report.installed ||
+    report.hubctlMissing ||
+    report.hooks.some((hook) => hook.legacy && samePath(hook.hubctlPath, hubctlPath, platform));
+  if (!needsRepair) return false;
+  await installHooks(profile, hubctlPath);
+  return true;
 }
 
 export async function installHooks(profile: ClaudeProfile, hubctlPath: string): Promise<void> {
