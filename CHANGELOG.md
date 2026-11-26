@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.1 — 2026-11-26
+
+- Oturum başlığındaki model seçici, çalışan oturumun tam model adını (ör. `claude-haiku-…`) doğru aileyle gösterir; gereksiz "Özel" kutusu açılmaz.
+- Alt ajan kartı ve paneli, alt ajanın ana konuşmaya teslim ettiği raporu gösterir (önceden yalnızca "rapor mesaj olarak iletildi" notu görünüyordu). Rapor teslimi adım sayısına eklenmez.
+- Tur sonunda görünen boş, fazladan "Tur tamamlandı" satırı kalktı.
+- Bir profil oturum açmamışsa Ayarlar → Genel, o profile giriş yapmak için çalıştırılacak komutu gösterir (macOS ve Windows için ayrı) ve kopyalatır.
+- Sistemde "hareketi azalt" açıksa uygulama içi animasyonlar da kapanır.
+
 ## 0.1.0 — 2026-11-25
 
 İlk sürüm.

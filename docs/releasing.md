@@ -83,8 +83,10 @@ pnpm bundle      # x64 by default; builds and signs target\x86_64-pc-windows-msv
 pnpm release     # creates/updates GitHub Release v<v>, uploads the installer and latest.json
 ```
 
-`pnpm release` merges into an existing `latest.json`. A macOS build published to the same tag later
-(`pnpm bundle && pnpm release` on the Mac) adds `darwin-*` next to `windows-x86_64`.
+`pnpm release` merges into an existing `latest.json`, so the Mac and Windows builds can be published to
+the same tag in either order. The release is created as a **draft** and goes public only when both
+`darwin-aarch64` and `windows-x86_64` are in `latest.json`: installs never see a version their platform
+cannot download. To publish with one platform missing, run `pnpm release -- --publish`.
 
 ## Release on macOS
 

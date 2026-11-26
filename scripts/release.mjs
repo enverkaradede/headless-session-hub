@@ -14,6 +14,13 @@ const tag = `v${version}`;
 
 const gh = (args, options = {}) => execFileSync("gh", args, { cwd: root, encoding: "utf8", ...options });
 
+/**
+ * A release stays a draft until every platform below is in latest.json, so installs never see a version
+ * their platform cannot download. `pnpm release -- --publish` publishes with whatever is there.
+ */
+const REQUIRED_PLATFORMS = ["darwin-aarch64", "windows-x86_64"];
+const PUBLISH_ANYWAY = process.argv.includes("--publish");
+
 /** Updater platform key for each Rust target triple that `pnpm bundle --target` can produce. */
 const PLATFORM_BY_TRIPLE = {
   "x86_64-pc-windows-msvc": "windows-x86_64",
@@ -119,7 +126,7 @@ const workDir = mkdtempSync(path.join(tmpdir(), "hub-release-"));
 if (!releaseExists()) {
   const notesFile = path.join(workDir, "notes.md");
   writeFileSync(notesFile, notes);
-  gh(["release", "create", tag, "--repo", REPO, "--title", `Session Hub ${version}`, "--notes-file", notesFile], { stdio: "inherit" });
+  gh(["release", "create", tag, "--repo", REPO, "--draft", "--title", `Session Hub ${version}`, "--notes-file", notesFile], { stdio: "inherit" });
 }
 
 const manifest = existingManifest(workDir) ?? { version, notes, pub_date: new Date().toISOString(), platforms: {} };
@@ -142,4 +149,15 @@ const uploads = [...artifacts, ...installers].map(({ file, asset }) => {
   return copy;
 });
 gh(["release", "upload", tag, "--repo", REPO, "--clobber", ...uploads, manifestFile], { stdio: "inherit" });
-console.log(`Published ${artifacts.map((artifact) => artifact.platform).join(", ")} to ${tag}.`);
+console.log(`Uploaded ${artifacts.map((artifact) => artifact.platform).join(", ")} to ${tag}.`);
+
+const isDraft = gh(["release", "view", tag, "--repo", REPO, "--json", "isDraft", "--jq", ".isDraft"]).trim() === "true";
+const missing = REQUIRED_PLATFORMS.filter((platform) => !manifest.platforms[platform]);
+if (!isDraft) {
+  console.log(`${tag} is already public; installs pick up the new latest.json.`);
+} else if (missing.length === 0 || PUBLISH_ANYWAY) {
+  gh(["release", "edit", tag, "--repo", REPO, "--draft=false", "--latest"], { stdio: "inherit" });
+  console.log(`Published ${tag}; installs will offer the update.`);
+} else {
+  console.log(`${tag} stays a draft until ${missing.join(", ")} is uploaded (or run: pnpm release -- --publish).`);
+}

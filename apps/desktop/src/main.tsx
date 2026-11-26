@@ -1,3 +1,4 @@
+import { MotionConfig } from "motion/react";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
@@ -21,8 +22,11 @@ if (!container) throw new Error("root element missing from index.html");
 
 createRoot(container).render(
   <StrictMode>
-    <ErrorBoundary>
-      <App />
-    </ErrorBoundary>
+    {/* "user": the OS "reduce motion" setting also stops motion's JS animations, which the CSS guard cannot reach. */}
+    <MotionConfig reducedMotion="user">
+      <ErrorBoundary>
+        <App />
+      </ErrorBoundary>
+    </MotionConfig>
   </StrictMode>,
 );

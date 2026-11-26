@@ -70,5 +70,5 @@ writeFileSync(changelog, [title, "", `## ${version} — ${date}`, "", entries, .
 
 console.log(`${current} → ${version}`);
 console.log("Next: edit CHANGELOG.md, then");
-console.log(`  git commit -am "chore(release): v${version}" && git tag v${version} && git push --follow-tags`);
+console.log(`  git commit -am "chore(release): v${version}" && git tag -a v${version} -m \"Session Hub ${version}\" && git push --follow-tags`);
 console.log("  (Windows VM) pnpm bundle && pnpm release");
